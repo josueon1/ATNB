@@ -91,3 +91,7 @@ streamlit run app/dashboard.py
 ## 👨‍💻 Autor
 
 Projeto acadêmico desenvolvido para disciplina de Big Data em Python.
+
+Fábio Macieira
+Josué Ferreira
+Vitor ....
