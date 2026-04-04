@@ -1,3 +1,6 @@
 pandas
 streamlit
 plotly
+pyarrow
+dask[dataframe]
+numpy
