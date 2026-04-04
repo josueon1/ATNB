@@ -94,4 +94,23 @@ Projeto acadêmico desenvolvido para disciplina de Big Data em Python.
 
 Fábio Macieira
 Josué Ferreira
-Vitor ....
+Victor Martins
+
+
+## Como rodar o projeto
+
+* pip install -r requirements.txt
+Depois:
+* streamlit run app/dashboard.py
+
+## Criando o ambiente virtual
+python -m venv .venv
+
+# ativando o ambiente
+.venv\Scripts\Activate.ps1
+
+# Instalar as dependências:
+pip install -r requirements.txt
+
+# Para desativar quando terminar
+deactivate
