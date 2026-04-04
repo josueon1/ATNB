@@ -38,5 +38,7 @@ Thumbs.db
 # Data (optional: uncomment if you don't want to track CSV files)
 # data/*.csv
 
-# RENAEST dados abertos
-data/renaest_dabertos_atualizado/
+# Data folder - ignore all contents but keep the folder
+data/*
+data/**
+!data/.gitkeep
