@@ -70,13 +70,35 @@ Todos os gráficos são interativos e executados no navegador.
 
 ## ▶️ Como Executar
 
-Instalar dependências:
+### 1. Instalar dependências
 
+```bash
 pip install -r requirements.txt
+```
 
-Executar o projeto:
+### 2. Rodar a Pipeline de Dados
 
+Executa as camadas Bronze → Silver → Gold → Parquet:
+
+```bash
+python -m src.pipeline.pipeline
+```
+
+Opções disponíveis:
+
+```bash
+# Pula o arquivo TipoVeiculo (310 MB) para execução mais rápida
+python -m src.pipeline.pipeline --skip-heavy
+
+# Processa apenas um ano específico
+python -m src.pipeline.pipeline --ano 2023
+```
+
+### 3. Rodar o Dashboard
+
+```bash
 streamlit run app/dashboard.py
+```
 
 ---
 
@@ -99,18 +121,42 @@ Victor Martins
 
 ## Como rodar o projeto
 
-* pip install -r requirements.txt
-Depois:
-* streamlit run app/dashboard.py
+### Criando o ambiente virtual
 
-## Criando o ambiente virtual
+```bash
 python -m venv .venv
+```
 
-# ativando o ambiente
+### Ativando o ambiente
+
+```bash
+# Windows
 .venv\Scripts\Activate.ps1
 
-# Instalar as dependências:
-pip install -r requirements.txt
+# Linux/macOS
+source .venv/bin/activate
+```
 
-# Para desativar quando terminar
+### Instalar as dependências
+
+```bash
+pip install -r requirements.txt
+```
+
+### Rodar a pipeline
+
+```bash
+python -m src.pipeline.pipeline
+```
+
+### Rodar o dashboard
+
+```bash
+streamlit run app/dashboard.py
+```
+
+### Desativar o ambiente quando terminar
+
+```bash
 deactivate
+```
