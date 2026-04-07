@@ -30,7 +30,16 @@ DATA_DIR = ROOT / "data"
 PROCESSED_DIR = DATA_DIR / "processed"
 
 
+def _silver_exists(name: str) -> bool:
+    """Retorna True se o arquivo/pasta Silver já foi gerado."""
+    p = PROCESSED_DIR / name
+    if p.is_dir():
+        return any(p.rglob("*.parquet"))
+    return p.exists()
+
+
 def run_pipeline(skip_heavy: bool = False, ano_filtro: int | None = None) -> None:
+    import pandas as pd
     from src.pipeline import ingestion, transform, enrich, persist
 
     t0 = time.time()
@@ -42,56 +51,78 @@ def run_pipeline(skip_heavy: bool = False, ano_filtro: int | None = None) -> Non
     logger.info("  ano_filtro  : %s", ano_filtro or "todos")
     logger.info("=" * 60)
 
-    # ── BRONZE: Ingestão ──────────────────────────────────────────────────
-    logger.info("[BRONZE] Ingestão dos dados brutos...")
+    # ── BRONZE → SILVER: reutiliza parquet se já existir ─────────────────
+    logger.info("[BRONZE/SILVER] Verificando camadas Silver existentes...")
 
+    # Acidentes — sempre re-processa (necessário para o Gold)
+    logger.info("[BRONZE] Ingestão dos dados brutos de acidentes...")
     df_acidentes_raw = ingestion.ingest_acidentes(DATA_DIR)
-    df_vitimas_raw = ingestion.ingest_vitimas(DATA_DIR)
-    df_localidade_raw = ingestion.ingest_localidade(DATA_DIR)
-    df_volume_raw = ingestion.ingest_volume_trafego(DATA_DIR)
-
-    df_tipo_veiculo_raw = None
-    if not skip_heavy:
-        df_tipo_veiculo_raw = ingestion.ingest_tipo_veiculo(DATA_DIR)
-
-    # ── SILVER: Transformação ─────────────────────────────────────────────
-    logger.info("[SILVER] Transformação e limpeza dos dados...")
-
     df_acidentes = transform.transform_acidentes(df_acidentes_raw)
     del df_acidentes_raw
 
-    df_vitimas = transform.transform_vitimas(df_vitimas_raw)
-    del df_vitimas_raw
+    # Localidade
+    if _silver_exists("localidade_silver.parquet"):
+        logger.info("[SILVER] localidade_silver já existe — carregando do parquet...")
+        df_localidade = persist.load_parquet(PROCESSED_DIR / "localidade_silver.parquet")
+    else:
+        df_localidade_raw = ingestion.ingest_localidade(DATA_DIR)
+        df_localidade = transform.transform_localidade(df_localidade_raw)
+        del df_localidade_raw
+        persist.save_localidade_silver(df_localidade, PROCESSED_DIR)
 
-    df_localidade = transform.transform_localidade(df_localidade_raw)
-    del df_localidade_raw
+    # Volume de tráfego
+    if _silver_exists("volume_trafego_silver.parquet"):
+        logger.info("[SILVER] volume_trafego_silver já existe — carregando do parquet...")
+        df_volume = persist.load_parquet(PROCESSED_DIR / "volume_trafego_silver.parquet")
+    else:
+        df_volume_raw = ingestion.ingest_volume_trafego(DATA_DIR)
+        df_volume = transform.transform_volume_trafego(df_volume_raw)
+        del df_volume_raw
+        persist.save_volume_trafego_silver(df_volume, PROCESSED_DIR)
 
-    df_volume = transform.transform_volume_trafego(df_volume_raw)
-    del df_volume_raw
+    # Vítimas — dataset pesado (12.5M linhas): reutiliza se já existir
+    if _silver_exists("vitimas_silver"):
+        logger.info("[SILVER] vitimas_silver já existe — carregando do parquet (evita OOM)...")
+        import pyarrow.parquet as pq
+        filters = [("ano_acidente", "=", str(ano_filtro))] if ano_filtro else None
+        table = pq.read_table(str(PROCESSED_DIR / "vitimas_silver"), filters=filters)
+        df_vitimas = table.to_pandas()
+        # Garante que categorias sejam strings para o enrich funcionar
+        for col in df_vitimas.select_dtypes(["category"]).columns:
+            df_vitimas[col] = df_vitimas[col].astype(str)
+        logger.info("  → %d linhas de vítimas carregadas", len(df_vitimas))
+    else:
+        logger.info("[BRONZE] Ingestão dos dados brutos de vítimas...")
+        df_vitimas_raw = ingestion.ingest_vitimas(DATA_DIR)
+        df_vitimas = transform.transform_vitimas(df_vitimas_raw)
+        del df_vitimas_raw
+        persist.save_vitimas_silver(df_vitimas, PROCESSED_DIR)
+
+    # TipoVeiculo (opcional / pesado)
+    df_tipo_veiculo_raw = None
+    if not skip_heavy:
+        df_tipo_veiculo_raw = ingestion.ingest_tipo_veiculo(DATA_DIR)
 
     df_tipo_veiculo = None
     if df_tipo_veiculo_raw is not None:
         df_tipo_veiculo = transform.transform_tipo_veiculo(df_tipo_veiculo_raw)
         del df_tipo_veiculo_raw
+        persist.save_tipo_veiculo_silver(df_tipo_veiculo, PROCESSED_DIR)
 
-    # Filtro por ano (opcional)
+    # Filtro por ano (opcional) — aplicado nos acidentes e vítimas
     if ano_filtro:
         logger.info("  Filtrando por ano %d...", ano_filtro)
         df_acidentes = df_acidentes[df_acidentes["ano_acidente"] == ano_filtro].copy()
-        df_vitimas = df_vitimas[df_vitimas["ano_acidente"] == ano_filtro].copy()
+        # Vítimas: já filtradas ao carregar do parquet; filtra só se veio do transform
+        if "ano_acidente" in df_vitimas.columns:
+            df_vitimas = df_vitimas[
+                df_vitimas["ano_acidente"].astype(str) == str(ano_filtro)
+            ].copy()
         if df_tipo_veiculo is not None:
             ids_filtrados = set(df_acidentes["num_acidente"].unique())
             df_tipo_veiculo = df_tipo_veiculo[
                 df_tipo_veiculo["num_acidente"].isin(ids_filtrados)
             ].copy()
-
-    # Persistir camada Silver
-    logger.info("[SILVER] Persistindo camada Silver...")
-    persist.save_localidade_silver(df_localidade, PROCESSED_DIR)
-    persist.save_vitimas_silver(df_vitimas, PROCESSED_DIR)
-    persist.save_volume_trafego_silver(df_volume, PROCESSED_DIR)
-    if df_tipo_veiculo is not None:
-        persist.save_tipo_veiculo_silver(df_tipo_veiculo, PROCESSED_DIR)
 
     # ── GOLD: Enriquecimento / Cruzamento ─────────────────────────────────
     logger.info("[GOLD] Cruzamento e enriquecimento dos dados...")
@@ -111,7 +142,6 @@ def run_pipeline(skip_heavy: bool = False, ano_filtro: int | None = None) -> Non
         del df_tipo_veiculo
     else:
         # DataFrame vazio para não quebrar o gold
-        import pandas as pd
         df_veiculos_agg = pd.DataFrame(
             columns=["num_acidente", "total_veiculos", "tipos_veiculos",
                      "veiculo_predominante"]

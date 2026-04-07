@@ -48,12 +48,14 @@ def aggregate_vitimas_por_acidente(df_vitimas: pd.DataFrame) -> pd.DataFrame:
     """
     logger.info("Agregando vítimas por acidente...")
 
-    # Contagem por gravidade — usa observed=True para evitar combinação cartesiana em colunas category
-    _vit = df_vitimas.copy()
-    if hasattr(_vit["gravidade_lesao"], "cat"):
-        _vit["gravidade_lesao"] = _vit["gravidade_lesao"].astype(str)
+    # Garante que gravidade_lesao seja string (sem category overhead)
+    grav = df_vitimas["gravidade_lesao"].astype(str)
+
+    # Pivot de gravidade sem copiar o DataFrame inteiro
     gravidade_pivot = (
-        _vit.groupby(["num_acidente", "gravidade_lesao"], observed=True)
+        df_vitimas[["num_acidente"]]
+        .assign(gravidade_lesao=grav)
+        .groupby(["num_acidente", "gravidade_lesao"], observed=True)
         .size()
         .unstack(fill_value=0)
         .add_prefix("vitimas_")
@@ -61,13 +63,12 @@ def aggregate_vitimas_por_acidente(df_vitimas: pd.DataFrame) -> pd.DataFrame:
     )
     gravidade_pivot.columns.name = None
 
-    # Totais gerais
-    totais = df_vitimas.groupby("num_acidente").agg(
+    # Totais gerais — sem lambda Python (usa só operações vetorizadas)
+    totais = df_vitimas.groupby("num_acidente", as_index=False).agg(
         total_vitimas=("qtde_envolvidos", "sum"),
         total_obitos=("qtde_obitos", "sum"),
         total_feridos=("qtde_feridosilesos", "sum"),
-        tipo_envolvidos=("tp_envolvido", lambda x: x.dropna().unique().tolist()),
-    ).reset_index()
+    )
 
     df = totais.merge(gravidade_pivot, on="num_acidente", how="left")
     logger.info("  → %d acidentes com dados de vítimas agregados", len(df))
