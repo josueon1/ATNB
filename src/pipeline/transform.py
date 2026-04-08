@@ -79,7 +79,7 @@ def transform_acidentes(df: pd.DataFrame) -> pd.DataFrame:
     str_cols = [
         "uf_acidente", "dia_semana", "fase_dia", "tp_acidente",
         "cond_meteorologica", "cond_pista", "tp_rodovia", "tp_pavimento",
-        "tp_pista", "bairro_acidente",
+        "tp_pista", "bairro_acidente", "end_acidente",
     ]
     for col in str_cols:
         if col in df.columns:

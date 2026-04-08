@@ -53,6 +53,13 @@ def load_correlacao() -> pd.DataFrame:
     return load_parquet(PROCESSED_DIR / "correlacao_frota_acidentes.parquet")
 
 
+@st.cache_data(show_spinner="Carregando dados de localização...")
+def load_gold_uf(ufs: tuple[str, ...]) -> pd.DataFrame:
+    """Carrega acidentes_gold filtrado por UF(s) para análise de locais."""
+    filters = [("uf_acidente", "in", list(ufs))] if ufs else None
+    return load_parquet(PROCESSED_DIR / "acidentes_gold", filters=filters)
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("Filtros")
@@ -254,6 +261,122 @@ fig_corr = px.scatter(
 fig_corr.update_layout(margin=dict(t=10, b=10))
 st.plotly_chart(fig_corr, width='stretch')
 
+st.divider()
+
+# ── Top 10 Locais por Estado ──────────────────────────────────────────────────
+st.subheader("Top 10 Locais com Mais Acidentes por Estado")
+
+if not uf_sel:
+    st.info("Selecione ao menos uma UF no painel lateral para visualizar este gráfico.")
+else:
+    df_gold_uf = load_gold_uf(tuple(sorted(uf_sel)))
+    has_rua = "end_acidente" in df_gold_uf.columns
+
+    # Agrupamento cidade + bairro
+    df_bairros = (
+        df_gold_uf
+        .groupby(["municipio", "bairro_acidente"], observed=True, dropna=False)
+        .agg(total_acidentes=("qtde_acidente", "sum"))
+        .reset_index()
+        .sort_values("total_acidentes", ascending=False)
+    )
+
+    top_cidades = (
+        df_gold_uf
+        .groupby("municipio", observed=True)
+        .agg(total_acidentes=("qtde_acidente", "sum"))
+        .reset_index()
+        .sort_values("total_acidentes", ascending=False)
+        .head(10)
+    )
+
+    col_tree, col_loc = st.columns([1.2, 0.8])
+
+    with col_tree:
+        st.markdown("**Top 10 Cidades — Distribuição por Bairro**")
+        df_tree = df_bairros[
+            df_bairros["municipio"].isin(top_cidades["municipio"])
+        ].dropna(subset=["bairro_acidente"])
+        fig_tree = px.treemap(
+            df_tree,
+            path=["municipio", "bairro_acidente"],
+            values="total_acidentes",
+            color="total_acidentes",
+            color_continuous_scale="Reds",
+            labels={"total_acidentes": "Acidentes", "municipio": "Município", "bairro_acidente": "Bairro"},
+            height=460,
+        )
+        fig_tree.update_layout(margin=dict(t=10, b=10))
+        st.plotly_chart(fig_tree, width='stretch')
+
+    with col_loc:
+        if has_rua:
+            st.markdown("**Top 10 Ruas com Mais Acidentes**")
+            df_ruas = (
+                df_gold_uf
+                .groupby(["municipio", "bairro_acidente", "end_acidente"], observed=True, dropna=False)
+                .agg(total_acidentes=("qtde_acidente", "sum"))
+                .reset_index()
+                .dropna(subset=["end_acidente"])
+                .sort_values("total_acidentes", ascending=False)
+                .head(10)
+            )
+            df_ruas["local"] = (
+                df_ruas["municipio"].fillna("?")
+                + " › " + df_ruas["bairro_acidente"].fillna("?")
+                + "\n" + df_ruas["end_acidente"]
+            )
+            fig_ruas = px.bar(
+                df_ruas.sort_values("total_acidentes"),
+                x="total_acidentes",
+                y="local",
+                orientation="h",
+                text="total_acidentes",
+                color="total_acidentes",
+                color_continuous_scale="Oranges",
+                labels={"total_acidentes": "Total de Acidentes", "local": "Local"},
+                height=460,
+            )
+            fig_ruas.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
+            fig_ruas.update_layout(
+                margin=dict(l=0, r=30, t=10, b=10),
+                coloraxis_showscale=False,
+            )
+            st.plotly_chart(fig_ruas, width='stretch')
+        else:
+            st.markdown("**Top 10 Bairros com Mais Acidentes**")
+            df_top_bairros = (
+                df_bairros
+                .dropna(subset=["bairro_acidente"])
+                .head(10)
+            )
+            df_top_bairros = df_top_bairros.copy()
+            df_top_bairros["local"] = (
+                df_top_bairros["municipio"].fillna("?")
+                + " › " + df_top_bairros["bairro_acidente"]
+            )
+            fig_bairros = px.bar(
+                df_top_bairros.sort_values("total_acidentes"),
+                x="total_acidentes",
+                y="local",
+                orientation="h",
+                text="total_acidentes",
+                color="total_acidentes",
+                color_continuous_scale="Oranges",
+                labels={"total_acidentes": "Total de Acidentes", "local": "Município › Bairro"},
+                height=460,
+            )
+            fig_bairros.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
+            fig_bairros.update_layout(
+                margin=dict(l=0, r=30, t=10, b=10),
+                coloraxis_showscale=False,
+            )
+            st.plotly_chart(fig_bairros, width='stretch')
+            st.caption(
+                "Dados de rua (end_acidente) não disponíveis no dataset atual. "
+                "Re-execute o pipeline para incluir este campo."
+            )
+
 # ── Tabela completa ───────────────────────────────────────────────────────────
 with st.expander("Tabela completa do ranking de municípios"):
 
@@ -280,6 +403,102 @@ with st.expander("Tabela completa do ranking de municípios"):
     )
 
 st.divider()
+
+# ── Análise por Tipo de Acidente (Causas) ─────────────────────────────────────
+st.subheader("Análise por Tipo de Acidente (Causas)")
+
+if not uf_sel:
+    st.info("Selecione ao menos uma UF no painel lateral para visualizar a análise por causas.")
+else:
+    df_gold_causas = load_gold_uf(tuple(sorted(uf_sel)))
+
+    # Agregação por tipo de acidente
+    df_causas = (
+        df_gold_causas
+        .groupby("tp_acidente", observed=True)
+        .agg(
+            total_acidentes=("qtde_acidente", "sum"),
+            total_obitos=("qtde_obitos", "sum"),
+            total_feridos=("qtde_feridosilesos", "sum"),
+            acidentes_chuva=("cond_meteorologica", lambda s: (s == "CHUVA").sum()),
+            acidentes_noite=("fase_dia", lambda s: s.isin(["NOITE", "PLENA NOITE"]).sum()),
+        )
+        .reset_index()
+        .dropna(subset=["tp_acidente"])
+        .sort_values("total_acidentes", ascending=False)
+        .reset_index(drop=True)
+    )
+    df_causas.insert(0, "rank", df_causas.index + 1)
+    df_causas["taxa_mortalidade"] = (
+        df_causas["total_obitos"] / df_causas["total_acidentes"].replace(0, pd.NA) * 100
+    ).round(2)
+
+    caus_l, caus_r = st.columns([1.2, 0.8])
+
+    with caus_l:
+        st.markdown("**Acidentes por Tipo**")
+        fig_caus = px.bar(
+            df_causas.sort_values("total_acidentes"),
+            x="total_acidentes",
+            y="tp_acidente",
+            orientation="h",
+            text="total_acidentes",
+            color="total_acidentes",
+            color_continuous_scale="Blues",
+            labels={
+                "total_acidentes": "Total de Acidentes",
+                "tp_acidente": "Tipo de Acidente",
+            },
+            height=420,
+        )
+        fig_caus.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
+        fig_caus.update_layout(
+            margin=dict(l=0, r=30, t=10, b=10),
+            coloraxis_showscale=False,
+        )
+        st.plotly_chart(fig_caus, width='stretch')
+
+    with caus_r:
+        st.markdown("**Taxa de Mortalidade por Tipo (%)**")
+        df_mort = df_causas.dropna(subset=["taxa_mortalidade"]).sort_values("taxa_mortalidade")
+        fig_mort = px.bar(
+            df_mort,
+            x="taxa_mortalidade",
+            y="tp_acidente",
+            orientation="h",
+            text="taxa_mortalidade",
+            color="taxa_mortalidade",
+            color_continuous_scale="Reds",
+            labels={
+                "taxa_mortalidade": "Mortalidade (%)",
+                "tp_acidente": "Tipo de Acidente",
+            },
+            height=420,
+        )
+        fig_mort.update_traces(texttemplate="%{text:.2f}%", textposition="outside")
+        fig_mort.update_layout(
+            margin=dict(l=0, r=30, t=10, b=10),
+            coloraxis_showscale=False,
+        )
+        st.plotly_chart(fig_mort, width='stretch')
+
+    with st.expander("Tabela completa — Causas de Acidentes"):
+        st.dataframe(
+            df_causas.rename(columns={
+                "rank": "Rank",
+                "tp_acidente": "Tipo de Acidente",
+                "total_acidentes": "Acidentes",
+                "total_obitos": "Óbitos",
+                "total_feridos": "Feridos",
+                "taxa_mortalidade": "Mortalidade (%)",
+                "acidentes_chuva": "Em chuva",
+                "acidentes_noite": "À noite",
+            }),
+            width='stretch',
+            height=400,
+            hide_index=True,
+        )
+
 
 # ── Aprendizado de Máquina ────────────────────────────────────────────────────
 st.subheader("🤖 Aprendizado de Máquina — Previsão de Gravidade de Lesão")

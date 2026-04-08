@@ -131,10 +131,6 @@ def load_parquet(path: Path, filters: list | None = None) -> pd.DataFrame:
     """
     Lê um arquivo ou dataset Parquet.
     Aceita tanto arquivos únicos quanto diretórios particionados.
+    Filters no formato DNF: [("col", "op", val), ...] ou [[("col", "op", val), ...], ...]
     """
-    import pyarrow.parquet as pq
-
-    if path.is_dir():
-        dataset = pq.ParquetDataset(str(path), filters=filters, use_legacy_dataset=False)
-        return dataset.read_pandas().to_pandas()
     return pd.read_parquet(str(path), engine="pyarrow", filters=filters)

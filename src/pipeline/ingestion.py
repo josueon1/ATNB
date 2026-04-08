@@ -24,7 +24,7 @@ _ACIDENTES_COLS = [
     "ano_acidente", "mes_acidente", "dia_semana", "fase_dia", "hora_acidente",
     "tp_acidente", "cond_meteorologica", "cond_pista", "tp_rodovia",
     "tp_pavimento", "lim_velocidade", "tp_pista", "bairro_acidente",
-    "latitude_acidente", "longitude_acidente",
+    "end_acidente", "latitude_acidente", "longitude_acidente",
     "qtde_acidente", "qtde_acid_com_obitos", "qtde_envolvidos",
     "qtde_feridosilesos", "qtde_obitos",
 ]
