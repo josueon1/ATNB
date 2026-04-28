@@ -181,27 +181,67 @@ fig_ano.update_layout(
 )
 st.plotly_chart(fig_ano, width='stretch')
 
-# ── Linha 3: Distribuições ────────────────────────────────────────────────────
+st.divider()
+
+# ── Linha 3: Acidentes por Mês ─────────────────────────────────────────────────────────
+st.subheader("Acidentes por Mês")
+por_mes = load_temporal("por_mes")
+por_mes = por_mes.sort_values("mes_acidente")
+por_mes["mes_nome"] = por_mes["mes_acidente"].map({
+    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez",
+})
+
+fig_mes = go.Figure()
+fig_mes.add_trace(go.Bar(
+    x=por_mes["mes_nome"],
+    y=por_mes["total_acidentes"],
+    name="Acidentes",
+    marker_color="#969292",
+    text=por_mes["total_acidentes"],
+    texttemplate="%{text:,.0f}",
+    textposition="outside",
+))
+fig_mes.add_trace(go.Scatter(
+    x=por_mes["mes_nome"],
+    y=por_mes["total_obitos"],
+    name="Óbitos",
+    mode="lines+markers",
+    marker_color="#ef4444",
+    yaxis="y2",
+))
+fig_mes.update_layout(
+    yaxis=dict(title="Total de Acidentes"),
+    yaxis2=dict(title="Total de Óbitos", overlaying="y", side="right"),
+    legend=dict(orientation="h"),
+    height=340,
+    margin=dict(t=10, b=10),
+)
+st.plotly_chart(fig_mes, width='stretch')
+
+st.divider()
+
+# ── Linha 4: Distribuições ────────────────────────────────────────────────────
 c1, c2, c3 = st.columns(3)
 
-with c1:
-    st.subheader("Por Hora do Dia")
-    por_hora = load_temporal("por_hora")
-    por_hora = por_hora.dropna(subset=["hora"])
-    fig_hora = px.area(
-        por_hora,
-        x="hora",
-        y="total_acidentes",
-        labels={"hora": "Hora", "total_acidentes": "Acidentes"},
-        height=300,
-    )
-    fig_hora.update_layout(margin=dict(t=10, b=10))
-    st.plotly_chart(fig_hora, width='stretch')
+# with c1:
+#     st.subheader("Por Hora do Dia")
+#     por_hora = load_temporal("por_hora")
+#     por_hora = por_hora.dropna(subset=["hora"])
+#     fig_hora = px.area(
+#         por_hora,
+#         x="hora",
+#         y="total_acidentes",
+#         labels={"hora": "Hora", "total_acidentes": "Acidentes"},
+#         height=300,
+#     )
+#     fig_hora.update_layout(margin=dict(t=10, b=10))
+#     st.plotly_chart(fig_hora, width='stretch')
 
 with c2:
     st.subheader("Por Dia da Semana")
     por_dia = load_temporal("por_dia_semana")
-    ordem_dias = ["SEGUNDA", "TERCA", "QUARTA", "QUINTA", "SEXTA", "SABADO", "DOMINGO"]
+    ordem_dias = ["SEGUNDA-FEIRA", "TERCA-FEIRA", "QUARTA-FEIRA", "QUINTA-FEIRA", "SEXTA-FEIRA", "SABADO", "DOMINGO"]
     por_dia["dia_semana"] = pd.Categorical(
         por_dia["dia_semana"].astype(str), categories=ordem_dias, ordered=True
     )
@@ -234,44 +274,6 @@ with c3:
     )
     fig_fase.update_layout(margin=dict(t=10, b=0))
     st.plotly_chart(fig_fase, width='stretch')
-
-st.divider()
-
-# ── Acidentes por Mês ─────────────────────────────────────────────────────────
-st.subheader("Acidentes por Mês")
-por_mes = load_temporal("por_mes")
-por_mes = por_mes.sort_values("mes_acidente")
-por_mes["mes_nome"] = por_mes["mes_acidente"].map({
-    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
-    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez",
-})
-
-fig_mes = go.Figure()
-fig_mes.add_trace(go.Bar(
-    x=por_mes["mes_nome"],
-    y=por_mes["total_acidentes"],
-    name="Acidentes",
-    marker_color="#3b82f6",
-    text=por_mes["total_acidentes"],
-    texttemplate="%{text:,.0f}",
-    textposition="outside",
-))
-fig_mes.add_trace(go.Scatter(
-    x=por_mes["mes_nome"],
-    y=por_mes["total_obitos"],
-    name="Óbitos",
-    mode="lines+markers",
-    marker_color="#ef4444",
-    yaxis="y2",
-))
-fig_mes.update_layout(
-    yaxis=dict(title="Total de Acidentes"),
-    yaxis2=dict(title="Total de Óbitos", overlaying="y", side="right"),
-    legend=dict(orientation="h"),
-    height=340,
-    margin=dict(t=10, b=10),
-)
-st.plotly_chart(fig_mes, width='stretch')
 
 st.divider()
 
@@ -439,7 +441,7 @@ else:
     st.divider()
 
     # ── Veículos Envolvidos ──────────────────────────────────────────────────
-    st.markdown("#### Tipos de Veículos Envolvidos")
+    st.markdown("#### Índice de acidentes de trânsito")
 
     df_veic = (
         _gdf.groupby("veiculo_predominante", observed=True)
