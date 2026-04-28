@@ -68,6 +68,46 @@ Todos os gráficos são interativos e executados no navegador.
 
 ---
 
+## 🔄 Fluxo de Execução (Arquivos)
+
+```
+python -m src.pipeline.pipeline
+         │
+         ▼
+src/pipeline/pipeline.py          ← Orquestrador principal
+         │
+         ├─► src/pipeline/ingestion.py   ← BRONZE: lê os CSVs brutos de data/
+         │         data/acidentes2023.csv
+         │         data/Vitimas_DadosAbertos_20260312.csv
+         │         data/TipoVeiculo_DadosAbertos_20260312.csv
+         │         data/Localidade_20260312.csv
+         │         data/Volume_trafego_mensal.csv
+         │
+         ├─► src/pipeline/transform.py   ← SILVER: limpa e padroniza os dados
+         │         Normaliza datas, horas, strings e remove nulos
+         │
+         ├─► src/pipeline/enrich.py      ← GOLD: cruza as fontes e gera analíticos
+         │         acidentes + localidade (município/UF/habitantes/frota)
+         │         agregação de vítimas, veículos, ranking de locais
+         │         análise temporal e correlação de dados
+         │
+         ├─► src/pipeline/persist.py     ← Salva tudo como Parquet particionado
+         │         data/processed/acidentes_gold/   (por ano e UF)
+         │         data/processed/vitimas_silver/   (por ano)
+         │         data/processed/analise_temporal/
+         │         data/processed/...
+         │
+         └─► src/pipeline/ml.py          ← (opcional) Modelos de Machine Learning
+                   Prevê gravidade de lesão por Decision Tree / MLP / SVC
+
+streamlit run app/dashboard.py
+         │
+         ▼
+app/dashboard.py                  ← Lê os Parquets e exibe gráficos no navegador
+```
+
+---
+
 ## ▶️ Como Executar
 
 ### 1. Instalar dependências

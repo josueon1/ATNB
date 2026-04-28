@@ -44,7 +44,7 @@ def transform_acidentes(df: pd.DataFrame) -> pd.DataFrame:
 
     # ── 2. Parsing de data e hora ─────────────────────────────────────────
     df["data_acidente"] = pd.to_datetime(df["data_acidente"], errors="coerce")
-    df["hora"] = _parse_hora(df["hora_acidente"])
+    df["hora"] = _parse_hora(df["hora_acidente"]).fillna(0)
     df["ano_acidente"] = df["ano_acidente"].astype("Int16")
     df["mes_acidente"] = df["mes_acidente"].astype("Int8")
 
@@ -73,7 +73,7 @@ def transform_acidentes(df: pd.DataFrame) -> pd.DataFrame:
         df.get("lim_velocidade", pd.Series(dtype=str))
           .astype(str).str.extract(r"(\d+)")[0],
         errors="coerce",
-    ).astype("Int16")
+    ).fillna(0).astype("Int16")
 
     # ── 5. Colunas categóricas ────────────────────────────────────────────
     str_cols = [
@@ -191,9 +191,9 @@ def transform_volume_trafego(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Transformando volume de tráfego (%d linhas)...", len(df))
     df = df.copy()
 
-    df["vmd"] = pd.to_numeric(df["vmd"], errors="coerce").astype("Int32")
-    df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
-    df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
+    df["vmd"] = pd.to_numeric(df["vmd"], errors="coerce").fillna(0).astype("Int32")
+    df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce").fillna(0)
+    df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce").fillna(0)
     df["data"] = pd.to_datetime(df["data"], format="%Y-%m", errors="coerce")
     df["ano"] = df["data"].dt.year.astype("Int16")
     df["mes"] = df["data"].dt.month.astype("Int8")
