@@ -221,59 +221,61 @@ st.plotly_chart(fig_mes, width='stretch')
 
 st.divider()
 
-# ── Linha 4: Distribuições ────────────────────────────────────────────────────
-c1, c2, c3 = st.columns(3)
+# ── Linha 4: Por Hora do Dia ──────────────────────────────────────────────────
+st.subheader("Por Hora do Dia")
+por_hora = load_temporal("por_hora")
+por_hora = por_hora.dropna(subset=["hora"])
+fig_hora = px.area(
+    por_hora,
+    x="hora",
+    y="total_acidentes",
+    labels={"hora": "Hora", "total_acidentes": "Acidentes"},
+    height=320,
+)
+fig_hora.update_layout(margin=dict(t=10, b=10))
+st.plotly_chart(fig_hora, width='stretch')
 
-# with c1:
-#     st.subheader("Por Hora do Dia")
-#     por_hora = load_temporal("por_hora")
-#     por_hora = por_hora.dropna(subset=["hora"])
-#     fig_hora = px.area(
-#         por_hora,
-#         x="hora",
-#         y="total_acidentes",
-#         labels={"hora": "Hora", "total_acidentes": "Acidentes"},
-#         height=300,
-#     )
-#     fig_hora.update_layout(margin=dict(t=10, b=10))
-#     st.plotly_chart(fig_hora, width='stretch')
+st.divider()
 
-with c2:
-    st.subheader("Por Dia da Semana")
-    por_dia = load_temporal("por_dia_semana")
-    ordem_dias = ["SEGUNDA-FEIRA", "TERCA-FEIRA", "QUARTA-FEIRA", "QUINTA-FEIRA", "SEXTA-FEIRA", "SABADO", "DOMINGO"]
-    por_dia["dia_semana"] = pd.Categorical(
-        por_dia["dia_semana"].astype(str), categories=ordem_dias, ordered=True
-    )
-    por_dia = por_dia.dropna(subset=["dia_semana"]).sort_values("dia_semana")
-    fig_dia = px.bar(
-        por_dia,
-        x="dia_semana",
-        y="total_acidentes",
-        color="total_obitos",
-        color_continuous_scale="OrRd",
-        labels={
-            "dia_semana": "Dia", "total_acidentes": "Acidentes",
-            "total_obitos": "Óbitos",
-        },
-        height=300,
-    )
-    fig_dia.update_layout(margin=dict(t=10, b=10))
-    st.plotly_chart(fig_dia, width='stretch')
+# ── Linha 5: Por Dia da Semana ────────────────────────────────────────────────
+st.subheader("Por Dia da Semana")
+por_dia = load_temporal("por_dia_semana")
+ordem_dias = ["SEGUNDA-FEIRA", "TERCA-FEIRA", "QUARTA-FEIRA", "QUINTA-FEIRA", "SEXTA-FEIRA", "SABADO", "DOMINGO"]
+por_dia["dia_semana"] = pd.Categorical(
+    por_dia["dia_semana"].astype(str), categories=ordem_dias, ordered=True
+)
+por_dia = por_dia.dropna(subset=["dia_semana"]).sort_values("dia_semana")
+fig_dia = px.bar(
+    por_dia,
+    x="total_acidentes",
+    y="dia_semana",
+    orientation="h",
+    color="total_obitos",
+    color_continuous_scale="OrRd",
+    labels={
+        "dia_semana": "Dia", "total_acidentes": "Acidentes",
+        "total_obitos": "Óbitos",
+    },
+    height=380,
+)
+fig_dia.update_layout(margin=dict(t=10, b=10))
+st.plotly_chart(fig_dia, width='stretch')
 
-with c3:
-    st.subheader("Por Fase do Dia")
-    por_fase = load_temporal("por_fase_dia")
-    por_fase = por_fase.dropna(subset=["fase_dia"])
-    fig_fase = px.pie(
-        por_fase,
-        values="total_acidentes",
-        names="fase_dia",
-        hole=0.4,
-        height=300,
-    )
-    fig_fase.update_layout(margin=dict(t=10, b=0))
-    st.plotly_chart(fig_fase, width='stretch')
+st.divider()
+
+# ── Linha 6: Por Fase do Dia ──────────────────────────────────────────────────
+st.subheader("Por Fase do Dia")
+por_fase = load_temporal("por_fase_dia")
+por_fase = por_fase.dropna(subset=["fase_dia"])
+fig_fase = px.pie(
+    por_fase,
+    values="total_acidentes",
+    names="fase_dia",
+    hole=0.4,
+    height=400,
+)
+fig_fase.update_layout(margin=dict(t=10, b=0))
+st.plotly_chart(fig_fase, width='stretch')
 
 st.divider()
 
