@@ -42,3 +42,6 @@ Thumbs.db
 data/*
 data/**
 !data/.gitkeep
+
+# ZIP de dados gerado pelo setup_data.py
+processed_data.zip
