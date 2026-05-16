@@ -1,0 +1,19 @@
+services:
+  pipeline:
+    build: .
+    volumes:
+      - ./data:/app/data
+    command: >
+      python -m src.pipeline.pipeline --skip-heavy
+    profiles:
+      - pipeline
+
+  dashboard:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - pipeline
+    restart: unless-stopped
