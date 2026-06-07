@@ -39,6 +39,9 @@ Thumbs.db
 data/
 !data/.gitkeep
 
+# Machine Learning — módulo removido da aplicação
+src/pipeline/ml.py
+
 # ZIP de dados gerado pelo setup_data.py
 processed_data.zip
 .claude/gsd-file-manifest.json
@@ -416,5 +419,8 @@ processed_data.zip
 .claude/get-shit-done/templates/research-project/PITFALLS.md
 .claude/get-shit-done/templates/research-project/STACK.md
 .claude/get-shit-done/templates/research-project/SUMMARY.md
-. c l a u d e /  
+. c l a u d e / 
  
+ . g e m i n i /  
+ 
+.gemini/

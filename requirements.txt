@@ -4,4 +4,3 @@ plotly
 pyarrow
 dask[dataframe]
 numpy
-scikit-learn

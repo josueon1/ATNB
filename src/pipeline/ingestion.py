@@ -46,8 +46,6 @@ _LOCALIDADE_COLS = [
     "qtde_habitantes", "frota_total", "frota_circulante",
 ]
 
-_VOLUME_COLS = ["Sitio", "DATA", "ViaSentido", "VMD", "Lon", "Lat"]
-
 
 def _read_csv_chunked(
     path: Path,
@@ -105,27 +103,3 @@ def ingest_localidade(data_dir: Path) -> pd.DataFrame:
     return _read_csv_chunked(path, usecols=_LOCALIDADE_COLS, chunksize=200_000)
 
 
-def ingest_volume_trafego(data_dir: Path) -> pd.DataFrame:
-    """Lê o volume de tráfego mensal (dados de Fortaleza/CE)."""
-    path = data_dir / "Volume_trafego_mensal.csv"
-    logger.info("Ingerindo %s ...", path.name)
-    df = pd.read_csv(
-        path,
-        sep=",",
-        encoding="latin-1",
-        index_col=0,
-        quotechar='"',
-    )
-    df.columns = [c.strip().strip('"') for c in df.columns]
-    # normalizar nomes das colunas para snake_case
-    col_map = {
-        "Sitio": "sitio",
-        "DATA": "data",
-        "ViaSentido": "via_sentido",
-        "VMD": "vmd",
-        "Lon": "longitude",
-        "Lat": "latitude",
-    }
-    df = df.rename(columns=col_map)
-    logger.info("  → %d linhas lidas de %s", len(df), path.name)
-    return df

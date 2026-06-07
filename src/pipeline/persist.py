@@ -118,10 +118,6 @@ def save_correlacao_frota(df: pd.DataFrame, processed_dir: Path) -> None:
     _save_parquet(df, processed_dir / "correlacao_frota_acidentes.parquet")
 
 
-def save_volume_trafego_silver(df: pd.DataFrame, processed_dir: Path) -> None:
-    """Salva dataset Silver de volume de tráfego."""
-    _save_parquet(df, processed_dir / "volume_trafego_silver.parquet")
-
 
 # ────────────────────────────────────────────────────────────────────────────
 # Leitura utilitária (para o dashboard)

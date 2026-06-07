@@ -130,10 +130,19 @@ def build_ranking_locais(df_gold: pd.DataFrame) -> pd.DataFrame:
       - total de acidentes
       - total de óbitos
       - taxa de acidente por 100k habitantes
+      - taxa de letalidade (óbitos por acidentes)
+      - taxa de mortalidade por 100k habitantes (óbitos por população)
+      - UPS (Unidade Padrão de Severidade)
     """
     logger.info("Calculando ranking de locais com mais acidentes...")
 
-    agg = df_gold.groupby(
+    # Criar coluna temporária indicando se o acidente não teve vítimas (feridos ou óbitos)
+    df_gold_temp = df_gold.copy()
+    df_gold_temp["acidente_sem_vitima"] = (
+        (df_gold_temp["qtde_obitos"] == 0) & (df_gold_temp["qtde_feridosilesos"] == 0)
+    ).astype(int)
+
+    agg = df_gold_temp.groupby(
         ["uf_acidente", "municipio", "codigo_ibge", "qtde_habitantes",
          "frota_circulante", "taxa_motorizacao"],
         observed=True,
@@ -142,6 +151,7 @@ def build_ranking_locais(df_gold: pd.DataFrame) -> pd.DataFrame:
         total_obitos=("qtde_obitos", "sum"),
         total_feridos=("qtde_feridosilesos", "sum"),
         total_envolvidos=("qtde_envolvidos", "sum"),
+        acidentes_sem_vitimas=("acidente_sem_vitima", "sum"),
         acidentes_chuva=(
             "cond_meteorologica",
             lambda x: (x == "CHUVA").sum(),
@@ -158,11 +168,33 @@ def build_ranking_locais(df_gold: pd.DataFrame) -> pd.DataFrame:
         (agg["total_acidentes"] / agg["qtde_habitantes"]) * 100_000
     ).where(mask).round(2)
 
-    # Taxa de mortalidade por acidente
+    # Taxa de letalidade por acidente (óbitos / acidentes * 100)
     mask_acid = agg["total_acidentes"] > 0
-    agg["taxa_mortalidade"] = (
+    agg["taxa_letalidade"] = (
         (agg["total_obitos"] / agg["total_acidentes"]) * 100
     ).where(mask_acid).round(2)
+
+    # Taxa de mortalidade por 100k habitantes (óbitos / habitantes * 100.000)
+    agg["taxa_mortalidade_100k"] = (
+        (agg["total_obitos"] / agg["qtde_habitantes"]) * 100_000
+    ).where(mask).round(2)
+
+    # Taxa de feridos por 100k habitantes (feridos / habitantes * 100.000)
+    agg["taxa_feridos_100k"] = (
+        (agg["total_feridos"] / agg["qtde_habitantes"]) * 100_000
+    ).where(mask).round(2)
+
+    # Porcentagem de acidentes em chuva e noite
+    agg["pct_acidentes_chuva"] = (
+        (agg["acidentes_chuva"] / agg["total_acidentes"]) * 100
+    ).where(mask_acid).round(2)
+    agg["pct_acidentes_noite"] = (
+        (agg["acidentes_noite"] / agg["total_acidentes"]) * 100
+    ).where(mask_acid).round(2)
+
+    # Cálculo da Unidade Padrão de Severidade (UPS)
+    # UPS = (Óbitos * 13) + (Feridos * 5) + (Acidentes Sem Vítimas * 1)
+    agg["ups"] = (agg["total_obitos"] * 13) + (agg["total_feridos"] * 5) + (agg["acidentes_sem_vitimas"] * 1)
 
     agg = agg.sort_values("total_acidentes", ascending=False).reset_index(drop=True)
     agg["ranking_geral"] = agg.index + 1
@@ -214,7 +246,7 @@ def build_correlacao_frota_acidentes(df_ranking: pd.DataFrame) -> pd.DataFrame:
         "uf_acidente", "municipio", "codigo_ibge",
         "qtde_habitantes", "frota_circulante", "taxa_motorizacao",
         "total_acidentes", "total_obitos", "taxa_acidente_100k",
-        "taxa_mortalidade",
+        "taxa_letalidade", "taxa_mortalidade_100k", "ups",
     ]
     df = df_ranking[cols].copy()
 

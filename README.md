@@ -41,6 +41,7 @@ data/ → datasets utilizados
 notebooks/ → análise exploratória
 src/ → scripts de processamento
 app/ → dashboard interativo
+doc/ → documentação complementar (análise acadêmica, referências, etc.)
 
 ---
 
@@ -59,10 +60,12 @@ app/ → dashboard interativo
 
 O projeto apresenta:
 
-* gráficos de acidentes por estado
-* análise por horário
+* gráficos de acidentes por estado e municípios
+* análise por horário e sazonalidade
 * principais causas de acidentes
-* distribuição geográfica
+* correlações com rigor estatístico (R², P-value)
+* cálculos de métricas como UPS(Unidade Padrao de Severidade), Letalidade e Mortalidade por 100k
+* aba preditiva utilizando modelos de Machine Learning (Decision Tree, MLP, SVC)
 
 Todos os gráficos são interativos e executados no navegador.
 

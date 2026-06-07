@@ -70,16 +70,6 @@ def run_pipeline(skip_heavy: bool = False, ano_filtro: int | None = None) -> Non
         del df_localidade_raw
         persist.save_localidade_silver(df_localidade, PROCESSED_DIR)
 
-    # Volume de tráfego
-    if _silver_exists("volume_trafego_silver.parquet"):
-        logger.info("[SILVER] volume_trafego_silver já existe — carregando do parquet...")
-        df_volume = persist.load_parquet(PROCESSED_DIR / "volume_trafego_silver.parquet")
-    else:
-        df_volume_raw = ingestion.ingest_volume_trafego(DATA_DIR)
-        df_volume = transform.transform_volume_trafego(df_volume_raw)
-        del df_volume_raw
-        persist.save_volume_trafego_silver(df_volume, PROCESSED_DIR)
-
     # Vítimas — dataset pesado (12.5M linhas): reutiliza se já existir
     if _silver_exists("vitimas_silver"):
         logger.info("[SILVER] vitimas_silver já existe — carregando do parquet (evita OOM)...")

@@ -86,9 +86,9 @@ def load_ml_data(
 
 
 # ── Preparação das features ───────────────────────────────────────────────────
-def prepare_features(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+def prepare_features(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, dict]:
     """
-    Codifica features categóricas com LabelEncoder e retorna (X, y).
+    Codifica features categóricas com LabelEncoder e retorna (X, y, encoders).
     """
     df = df.copy()
 
@@ -103,7 +103,7 @@ def prepare_features(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
 
     X = df[FEATURES].astype(float).values
     y = df[TARGET].astype(str).values
-    return X, y
+    return X, y, encoders
 
 
 # ── Treino e avaliação dos modelos ────────────────────────────────────────────
@@ -208,7 +208,7 @@ def run_ml_pipeline(
         models = ["dt", "mlp", "svc"]
 
     df = load_ml_data(processed_dir, ano=ano, sample_n=sample_n)
-    X, y = prepare_features(df)
+    X, y, encoders = prepare_features(df)
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
@@ -230,5 +230,8 @@ def run_ml_pipeline(
 
     if "svc" in models:
         results["svc"] = train_svc(X_train, y_train, X_test, y_test)
+
+    results["encoders"] = encoders
+    results["features"] = FEATURES
 
     return results

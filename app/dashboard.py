@@ -1,4 +1,4 @@
-﻿"""
+"""
 Dashboard ATNB - Análise de Acidentes de Trânsito no Brasil
 ============================================================
 Consome os datasets Parquet gerados pelo pipeline.
@@ -125,7 +125,7 @@ def load_gold_estados(ano: int | None, ufs: tuple) -> pd.DataFrame:
         )
     )
     mask = agg["total_acidentes"] > 0
-    agg["taxa_mortalidade"] = (
+    agg["taxa_letalidade"] = (
         (agg["total_obitos"] / agg["total_acidentes"].replace(0, pd.NA)) * 100
     ).where(mask).round(2)
     return agg
@@ -156,7 +156,7 @@ def load_gold_municipios(ano: int | None, ufs: tuple) -> pd.DataFrame:
         .dropna(subset=["lat", "lon"])
     )
     mask = agg["total_acidentes"] > 0
-    agg["taxa_mortalidade"] = (
+    agg["taxa_letalidade"] = (
         (agg["total_obitos"] / agg["total_acidentes"].replace(0, pd.NA)) * 100
     ).where(mask).round(2)
     return agg
@@ -217,7 +217,9 @@ if ano_sel == "Todos":
             total_obitos=("total_obitos", "sum"),
             total_feridos=("total_feridos", "sum"),
             taxa_acidente_100k=("taxa_acidente_100k", "mean"),
-            taxa_mortalidade=("taxa_mortalidade", "mean"),
+            taxa_letalidade=("taxa_letalidade", "mean"),
+            taxa_mortalidade_100k=("taxa_mortalidade_100k", "mean"),
+            ups=("ups", "sum"),
             acidentes_chuva=("acidentes_chuva", "sum"),
             acidentes_noite=("acidentes_noite", "sum"),
         )
@@ -245,10 +247,14 @@ else:
     _agg_yr["taxa_acidente_100k"] = (
         (_agg_yr["total_acidentes"] / _agg_yr["_qtde_hab"]) * 100_000
     ).where(_mask_hab).round(2)
+    _agg_yr["taxa_mortalidade_100k"] = (
+        (_agg_yr["total_obitos"] / _agg_yr["_qtde_hab"]) * 100_000
+    ).where(_mask_hab).round(2)
     _mask_acid = _agg_yr["total_acidentes"] > 0
-    _agg_yr["taxa_mortalidade"] = (
+    _agg_yr["taxa_letalidade"] = (
         (_agg_yr["total_obitos"] / _agg_yr["total_acidentes"]) * 100
     ).where(_mask_acid).round(2)
+    _agg_yr["ups"] = (_agg_yr["total_obitos"] * 13) + (_agg_yr["total_feridos"] * 5)
     df_ranking = _agg_yr.drop(columns=["_qtde_hab"])
 
 df_ranking.insert(0, "ranking_geral", df_ranking.index + 1)
@@ -259,11 +265,12 @@ df_ranking_top = df_ranking.head(top_n)
 st.title("Análise de Acidentes de Trânsito no Brasil")
 st.caption("Fonte: RENAEST / SENATRAN | Pipeline: ATNB")
 
-k1, k2, k3, k4 = st.columns(4)
+k1, k2, k3, k4, k5 = st.columns(5)
 k1.metric("Total de Acidentes", f"{df_ranking['total_acidentes'].sum():,.0f}")
 k2.metric("Total de Óbitos", f"{df_ranking['total_obitos'].sum():,.0f}")
-k3.metric("Taxa de Mortalidade", f"{df_ranking['taxa_mortalidade'].mean():.1f}%")
-k4.metric("Municípios Analisados", f"{df_ranking['municipio'].nunique():,}")
+k3.metric("Letalidade Média", f"{df_ranking['taxa_letalidade'].mean():.1f}%")
+k4.metric("UPS Total", f"{df_ranking['ups'].sum():,.0f}")
+k5.metric("Municípios Analisados", f"{df_ranking['municipio'].nunique():,}")
 
 st.divider()
 
@@ -275,7 +282,7 @@ tab_geral, tab_temporal, tab_corr, tab_fatores, tab_ml = st.tabs([
     "📈 Evolução Temporal",
     "🔗 Correlação & Indicadores",
     "⚠️ Fatores & Causas",
-    "🤖 Machine Learning",
+    "🤖 Análise Preditiva (ML)",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -289,20 +296,20 @@ with tab_geral:
 
     _metrica_mapa = st.radio(
         "Métrica exibida no mapa",
-        options=["Total de Acidentes", "Total de Óbitos", "Taxa de Mortalidade (%)"],
+        options=["Total de Acidentes", "Total de Óbitos", "Taxa de Letalidade (%)"],
         horizontal=True,
         key="radio_mapa",
     )
     _col_mapa = {
         "Total de Acidentes": "total_acidentes",
         "Total de Óbitos": "total_obitos",
-        "Taxa de Mortalidade (%)": "taxa_mortalidade",
+        "Taxa de Letalidade (%)": "taxa_letalidade",
     }[_metrica_mapa]
 
     _labels_mapa = {
         "total_acidentes": "Acidentes",
         "total_obitos": "Óbitos",
-        "taxa_mortalidade": "Mortalidade (%)",
+        "taxa_letalidade": "Letalidade (%)",
         "uf_acidente": "UF",
         "municipio": "Município",
     }
@@ -325,7 +332,7 @@ with tab_geral:
             hover_data={
                 "total_acidentes": ":,.0f",
                 "total_obitos": ":,.0f",
-                "taxa_mortalidade": ":.2f",
+                "taxa_letalidade": ":.2f",
             },
             labels=_labels_mapa,
             fitbounds="locations",
@@ -360,7 +367,7 @@ with tab_geral:
             coloraxis_colorbar=dict(title=_metrica_mapa, thickness=14, len=0.7),
             geo=dict(bgcolor="rgba(0,0,0,0)"),
         )
-        st.plotly_chart(fig_mapa, use_container_width=True)
+        st.plotly_chart(fig_mapa, width='stretch')
     else:
         st.warning("GeoJSON não encontrado em data/geojson/br_states.json.")
 
@@ -387,7 +394,7 @@ with tab_geral:
                     "uf_acidente": True,
                     "total_acidentes": ":,.0f",
                     "total_obitos": ":,.0f",
-                    "taxa_mortalidade": ":.2f",
+                    "taxa_letalidade": ":.2f",
                     "lat": False,
                     "lon": False,
                 },
@@ -402,7 +409,7 @@ with tab_geral:
                 margin=dict(l=0, r=0, t=10, b=10),
                 coloraxis_colorbar=dict(title=_metrica_mapa, thickness=14, len=0.7),
             )
-            st.plotly_chart(fig_munic, use_container_width=True)
+            st.plotly_chart(fig_munic, width='stretch')
 
     st.divider()
 
@@ -427,15 +434,15 @@ with tab_geral:
         )
         fig_rank.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
         fig_rank.update_layout(margin=dict(l=0, r=20, t=20, b=0), showlegend=True)
-        st.plotly_chart(fig_rank, use_container_width=True)
+        st.plotly_chart(fig_rank, width='stretch')
 
     with col_right:
         st.markdown("**Ranking por Taxa por 100k hab.**")
-        _df_taxa = df_ranking_top[["municipio", "uf_acidente", "taxa_acidente_100k", "taxa_mortalidade"]].rename(columns={
+        _df_taxa = df_ranking_top[["municipio", "uf_acidente", "taxa_acidente_100k", "taxa_letalidade"]].rename(columns={
             "municipio": "Município", "uf_acidente": "UF",
-            "taxa_acidente_100k": "Taxa/100k", "taxa_mortalidade": "Mortalidade (%)",
+            "taxa_acidente_100k": "Taxa/100k", "taxa_letalidade": "Letalidade (%)",
         })
-        st.dataframe(_df_taxa, hide_index=True, use_container_width=True, height=400)
+        st.dataframe(_df_taxa, hide_index=True, width='stretch', height=400)
 
     st.divider()
 
@@ -443,7 +450,7 @@ with tab_geral:
     with st.expander("Tabela completa do ranking de municípios"):
         display_cols = [
             "ranking_geral", "municipio", "uf_acidente", "total_acidentes",
-            "total_obitos", "total_feridos", "taxa_acidente_100k", "taxa_mortalidade",
+            "total_obitos", "total_feridos", "taxa_acidente_100k", "taxa_letalidade",
             "acidentes_chuva", "acidentes_noite",
         ]
         st.dataframe(
@@ -455,11 +462,11 @@ with tab_geral:
                 "total_obitos": "Óbitos",
                 "total_feridos": "Feridos",
                 "taxa_acidente_100k": "Taxa/100k hab.",
-                "taxa_mortalidade": "Mortalidade (%)",
+                "taxa_letalidade": "Letalidade (%)",
                 "acidentes_chuva": "Em chuva",
                 "acidentes_noite": "À noite",
             }),
-            use_container_width=True,
+            width='stretch',
             height=400,
         )
 
@@ -525,7 +532,7 @@ with tab_temporal:
         height=320,
         margin=dict(t=10, b=10),
     )
-    st.plotly_chart(fig_ano, use_container_width=True)
+    st.plotly_chart(fig_ano, width='stretch')
 
     st.divider()
 
@@ -563,7 +570,7 @@ with tab_temporal:
         height=340,
         margin=dict(t=10, b=10),
     )
-    st.plotly_chart(fig_mes, use_container_width=True)
+    st.plotly_chart(fig_mes, width='stretch')
 
     st.divider()
 
@@ -581,7 +588,7 @@ with tab_temporal:
         height=320,
     )
     fig_hora.update_layout(margin=dict(t=10, b=10))
-    st.plotly_chart(fig_hora, use_container_width=True)
+    st.plotly_chart(fig_hora, width='stretch')
 
     st.divider()
 
@@ -607,7 +614,7 @@ with tab_temporal:
         height=380,
     )
     fig_dia.update_layout(margin=dict(t=10, b=10))
-    st.plotly_chart(fig_dia, use_container_width=True)
+    st.plotly_chart(fig_dia, width='stretch')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — CORRELAÇÃO & INDICADORES
@@ -627,7 +634,6 @@ with tab_corr:
         "total_acidentes":  "Acidentes",
         "total_obitos":     "Óbitos",
         "total_feridos":    "Feridos",
-        "taxa_mortalidade": "Mortalidade (%)",
         "acidentes_chuva":  "Em chuva",
         "acidentes_noite":  "À noite",
     }
@@ -653,7 +659,7 @@ with tab_corr:
         margin=dict(l=10, r=10, t=10, b=10),
         coloraxis_colorbar=dict(title="r", tickvals=[-1, -0.5, 0, 0.5, 1]),
     )
-    st.plotly_chart(fig_matrix, use_container_width=True)
+    st.plotly_chart(fig_matrix, width='stretch')
 
     st.divider()
 
@@ -678,6 +684,12 @@ with tab_corr:
     _lx = np.log10(df_corr_plot["frota_circulante"])
     _ly = np.log10(df_corr_plot["total_acidentes"])
     _coef = np.polyfit(_lx, _ly, 1)
+
+    import scipy.stats as stats
+    r_val, p_val = stats.pearsonr(_lx, _ly)
+    r_squared = r_val ** 2
+    p_text = "p < 0.001" if p_val < 0.001 else f"p = {p_val:.3f}"
+
     _x_range = np.linspace(_lx.min(), _lx.max(), 100)
     _trend_x = 10 ** _x_range
     _trend_y = 10 ** np.polyval(_coef, _x_range)
@@ -690,7 +702,7 @@ with tab_corr:
         size="total_obitos",
         size_max=30,
         hover_name="municipio",
-        hover_data={"taxa_acidente_100k": True, "taxa_mortalidade": True},
+        hover_data={"taxa_acidente_100k": True, "taxa_letalidade": True},
         log_x=True,
         log_y=True,
         labels={
@@ -703,11 +715,11 @@ with tab_corr:
     fig_corr.add_trace(go.Scatter(
         x=_trend_x, y=_trend_y,
         mode="lines",
-        name=f"Tendência (β={_coef[0]:.2f})",
+        name=f"Tendência (β={_coef[0]:.2f}, R²={r_squared:.2f}, {p_text})",
         line=dict(color="black", width=2, dash="dash"),
     ))
     fig_corr.update_layout(margin=dict(t=10, b=10))
-    st.plotly_chart(fig_corr, use_container_width=True)
+    st.plotly_chart(fig_corr, width='stretch')
 
     st.divider()
 
@@ -715,7 +727,7 @@ with tab_corr:
     st.subheader("Distribuição da Taxa de Acidentes por 100k hab. — por UF")
     _df_box = df_ranking.dropna(subset=["taxa_acidente_100k"])
     _uf_order = (
-        _df_box.groupby("uf_acidente")["taxa_acidente_100k"]
+        _df_box.groupby("uf_acidente", observed=True)["taxa_acidente_100k"]
         .median()
         .sort_values(ascending=False)
         .index.tolist()
@@ -730,7 +742,7 @@ with tab_corr:
         height=440,
     )
     fig_box.update_layout(showlegend=False, margin=dict(t=10, b=10))
-    st.plotly_chart(fig_box, use_container_width=True)
+    st.plotly_chart(fig_box, width='stretch')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 4 — FATORES & CAUSAS
@@ -819,7 +831,7 @@ with tab_fatores:
             )
             fig_tipos.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
             fig_tipos.update_layout(margin=dict(l=0, r=30, t=10, b=10), coloraxis_showscale=False)
-            st.plotly_chart(fig_tipos, use_container_width=True)
+            st.plotly_chart(fig_tipos, width='stretch')
 
         with tipo_r:
             st.dataframe(
@@ -829,11 +841,11 @@ with tab_fatores:
                     "total_acidentes": "Acidentes",
                     "total_obitos": "Óbitos",
                     "total_feridos": "Feridos",
-                    "mortalidade": "Mortalidade (%)",
+                    "mortalidade": "Letalidade (%)",
                 }),
                 hide_index=True,
                 height=460,
-                use_container_width=True,
+                width='stretch',
             )
 
         st.divider()
@@ -862,7 +874,7 @@ with tab_fatores:
         )
         fig_veic.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
         fig_veic.update_layout(margin=dict(l=0, r=30, t=10, b=10), coloraxis_showscale=False)
-        st.plotly_chart(fig_veic, use_container_width=True)
+        st.plotly_chart(fig_veic, width='stretch')
 
         st.divider()
 
@@ -909,7 +921,7 @@ with tab_fatores:
                 }),
                 hide_index=True,
                 height=540,
-                use_container_width=True,
+                width='stretch',
             )
 
         with rl2:
@@ -923,7 +935,7 @@ with tab_fatores:
                     }),
                     hide_index=True,
                     height=540,
-                    use_container_width=True,
+                    width='stretch',
                 )
             else:
                 st.info(
@@ -932,100 +944,95 @@ with tab_fatores:
                 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — MACHINE LEARNING
+# TAB 5 — ANÁLISE PREDITIVA (ML)
 # ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_resource(show_spinner="Treinando modelos de Machine Learning (apenas uma vez)...")
+def get_ml_models_v2():
+    from src.pipeline.ml import run_ml_pipeline
+    # Executa apenas nos dados de 2023 com 15k amostras para ser performático
+    return run_ml_pipeline(PROCESSED_DIR, ano=2023, sample_n=15000)
+
 with tab_ml:
-    st.subheader("Aprendizado de Máquina — Previsão de Gravidade de Lesão")
-    st.caption(
-        "Classifica a gravidade da lesão (SEM FERIMENTO / LEVE / GRAVE / ÓBITO) "
-        "com base em faixa etária, gênero, tipo de envolvido, equipamento de segurança, "
-        "suspeita de álcool e mês do acidente."
+    st.subheader("Modelos de Machine Learning: Previsão de Gravidade da Lesão")
+    st.markdown(
+        "Esta aba treina classificadores (Decision Tree, MLP, SVC) na base de vítimas "
+        "para identificar quais fatores melhor preveem a gravidade da lesão (Sem Ferimento, "
+        "Leve, Grave ou Óbito)."
     )
 
-    with st.expander("Treinar e avaliar modelos (scikit-learn)", expanded=False):
-        from src.pipeline.ml import FEATURES, run_ml_pipeline  # noqa: E402
-
-        ml_col1, ml_col2, ml_col3 = st.columns(3)
-        with ml_col1:
-            ano_ml = st.selectbox(
-                "Ano dos dados",
-                options=anos_disponiveis,
-                index=len(anos_disponiveis) - 1,
-                key="ml_ano",
-            )
-        with ml_col2:
-            sample_ml = st.select_slider(
-                "Amostras para treino+teste",
-                options=[5_000, 10_000, 20_000, 30_000, 50_000],
-                value=20_000,
-                key="ml_sample",
-            )
-        with ml_col3:
-            modelos_sel = st.multiselect(
-                "Modelos",
-                options=["DecisionTree", "MLP", "SVC"],
-                default=["DecisionTree", "MLP", "SVC"],
-                key="ml_models",
-            )
-
-        _model_map = {"DecisionTree": "dt", "MLP": "mlp", "SVC": "svc"}
-        models_keys = [_model_map[m] for m in modelos_sel if m in _model_map]
-
-        if st.button("Treinar modelos", type="primary", disabled=not models_keys):
-
-            @st.cache_data(show_spinner="Treinando modelos...")
-            def _cached_ml(ano: int, n: int, keys: tuple) -> dict:
-                return run_ml_pipeline(PROCESSED_DIR, ano=ano, sample_n=n, models=list(keys))
-
-            with st.spinner("Treinando... isso pode levar de 30 s a 2 min dependendo dos modelos."):
-                ml_results = _cached_ml(ano_ml, sample_ml, tuple(sorted(models_keys)))
-
-            st.success("Modelos treinados com sucesso!")
-
-            resumo = []
-            for key, res in ml_results.items():
-                row = {"Modelo": res["modelo"], "Acurácia (test)": f"{res['acuracia']:.4f}"}
-                if "cv_mean" in res:
-                    row["Cross-Val (média ± std)"] = f"{res['cv_mean']:.4f} ± {res['cv_std']:.4f}"
+    res = get_ml_models_v2()
+    
+    m1, m2, m3 = st.columns(3)
+    if "dt" in res:
+        m1.metric("Decision Tree (Acurácia)", f"{res['dt']['acuracia']:.1%}")
+    if "mlp" in res:
+        m2.metric("MLP Classifier (Acurácia)", f"{res['mlp']['acuracia']:.1%}")
+    if "svc" in res:
+        m3.metric("SVC (Acurácia)", f"{res['svc']['acuracia']:.1%}")
+    
+    if "dt" in res:
+        st.info(f"**O que isso significa?** A nossa Inteligência Artificial previu corretamente o destino das vítimas em **{res['dt']['acuracia']:.1%}** dos acidentes reais testados.")
+        
+        human_names = {
+            "susp_alcool": "Suspeita de Álcool",
+            "tp_envolvido": "Condição (Pedestre/Motorista/Passageiro)",
+            "mes_acidente": "Mês do Acidente (Sazonalidade)",
+            "faixa_idade": "Faixa de Idade",
+            "equip_seguranca": "Uso de Cinto/Capacete",
+            "genero": "Gênero",
+            "ind_motorista": "Era Motorista?"
+        }
+        
+        st.markdown("#### Os Maiores Culpados (Importância das Variáveis)")
+        feat_imp = pd.Series(res['dt']['feature_importances']).sort_values(ascending=True)
+        feat_imp.index = feat_imp.index.map(lambda x: human_names.get(x, x))
+        fig_imp = px.bar(
+            x=feat_imp.values,
+            y=feat_imp.index,
+            orientation="h",
+            labels={"x": "Peso na Decisão", "y": "Característica"},
+            title="O que mais transforma um acidente em fatal?"
+        )
+        st.plotly_chart(fig_imp, use_container_width=True)
+        
+    st.divider()
+    
+    st.markdown("### 🎮 Simulador de Risco (Machine Learning na Prática)")
+    st.markdown("Crie um cenário fictício abaixo e veja se a nossa Inteligência Artificial prevê que a vítima sai ilesa ou entra em óbito.")
+    
+    encoders = res.get("encoders", {})
+    features = res.get("features", [])
+    
+    with st.form("simulador_form"):
+        col1, col2 = st.columns(2)
+        user_input = {}
+        for i, feat in enumerate(features):
+            target_col = col1 if i % 2 == 0 else col2
+            label = human_names.get(feat, feat) if "dt" in res else feat
+            if feat in encoders:
+                options = list(encoders[feat].classes_)
+                user_input[feat] = target_col.selectbox(label, options)
+            else:
+                user_input[feat] = target_col.number_input(label, value=0)
+        
+        submitted = st.form_submit_button("Consultar Oráculo (Gerar Previsão)", type="primary")
+        if submitted:
+            x_sim = []
+            for feat in features:
+                if feat in encoders:
+                    if user_input[feat] in encoders[feat].classes_:
+                        x_sim.append(encoders[feat].transform([user_input[feat]])[0])
+                    else:
+                        x_sim.append(0)
                 else:
-                    row["Cross-Val (média ± std)"] = "—"
-                resumo.append(row)
-
-            st.dataframe(pd.DataFrame(resumo), use_container_width=True, hide_index=True)
-
-            st.markdown("**Previsões de exemplo (5 amostras do conjunto de teste):**")
-            for key, res in ml_results.items():
-                st.write(f"`{res['modelo']}` → {res['y_pred_sample']}")
-
-            if "dt" in ml_results and "feature_importances" in ml_results["dt"]:
-                fi = ml_results["dt"]["feature_importances"]
-                df_fi = (
-                    pd.DataFrame({"Feature": list(fi.keys()), "Importância": list(fi.values())})
-                    .sort_values("Importância", ascending=True)
-                )
-                fig_fi = px.bar(
-                    df_fi,
-                    x="Importância",
-                    y="Feature",
-                    orientation="h",
-                    title="Importância das Features — Decision Tree",
-                    height=300,
-                    color="Importância",
-                    color_continuous_scale="Blues",
-                )
-                fig_fi.update_layout(margin=dict(t=40, b=10), coloraxis_showscale=False)
-                st.plotly_chart(fig_fi, use_container_width=True)
-
-            with st.expander("Relatório detalhado por classe"):
-                for key, res in ml_results.items():
-                    st.markdown(f"**{res['modelo']}**")
-                    report_df = (
-                        pd.DataFrame(res["report"])
-                        .T.drop(index=["accuracy", "macro avg", "weighted avg"], errors="ignore")
-                        .round(4)
-                    )
-                    st.dataframe(
-                        report_df[["precision", "recall", "f1-score", "support"]],
-                        use_container_width=True,
-                    )
-                    st.markdown("---")
+                    x_sim.append(user_input[feat])
+            
+            pred = res["dt"]["clf"].predict(np.array([x_sim]))[0]
+            
+            if pred == "OBITO":
+                st.error(f"🚨 A IA analisou este perfil e a previsão é: **{pred}**")
+            elif pred == "GRAVE":
+                st.warning(f"⚠️ A IA analisou este perfil e a previsão é: **{pred}**")
+            else:
+                st.success(f"✅ A IA analisou este perfil e a previsão é: **{pred}**")

@@ -185,18 +185,3 @@ def transform_localidade(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("  → localidade transformada: %d municípios únicos", len(df))
     return df
 
-
-def transform_volume_trafego(df: pd.DataFrame) -> pd.DataFrame:
-    """Transforma os dados de volume de tráfego mensal."""
-    logger.info("Transformando volume de tráfego (%d linhas)...", len(df))
-    df = df.copy()
-
-    df["vmd"] = pd.to_numeric(df["vmd"], errors="coerce").fillna(0).astype("Int32")
-    df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce").fillna(0)
-    df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce").fillna(0)
-    df["data"] = pd.to_datetime(df["data"], format="%Y-%m", errors="coerce")
-    df["ano"] = df["data"].dt.year.astype("Int16")
-    df["mes"] = df["data"].dt.month.astype("Int8")
-
-    logger.info("  → volume de tráfego transformado: %d linhas", len(df))
-    return df
