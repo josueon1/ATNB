@@ -58,16 +58,15 @@ doc/ → documentação complementar (análise acadêmica, referências, etc.)
 
 ## 📈 Visualizações
 
-O projeto apresenta:
+O projeto apresenta uma análise rigorosa e enxuta, focada em estatística e tendências, contendo:
 
-* gráficos de acidentes por estado e municípios
-* análise por horário e sazonalidade
-* principais causas de acidentes
-* correlações com rigor estatístico (R², P-value)
-* cálculos de métricas como UPS(Unidade Padrao de Severidade), Letalidade e Mortalidade por 100k
-* aba preditiva utilizando modelos de Machine Learning (Decision Tree, MLP, SVC)
+* **Visão Geral:** Mapa interativo de acidentes com drill-down por município e indicadores de letalidade e mortalidade por 100k hab.
+* **Análise Temporal:** Séries históricas de acidentes e óbitos agrupados por mês, dia da semana e hora.
+* **Correlação e Indicadores:** Gráfico de dispersão cruzando a Frota Circulante com o Total de Acidentes por Município (escala logarítmica) com cálculo OLS (Linha de Tendência) e correlação de Pearson (R²).
+* **Fatores e Causas:** Ranking dos tipos de acidentes mais recorrentes e mapeamento das vias e bairros mais perigosos.
+* **Previsão e Tendência:** Decomposição Sazonal (STL) para isolamento de anomalias (ex: efeito do lockdown da COVID-19) e projeção estatística preditiva utilizando o modelo de Holt-Winters.
 
-Todos os gráficos são interativos e executados no navegador.
+Todos os gráficos são interativos, dinâmicos e executados nativamente no navegador via Streamlit.
 
 ---
 
@@ -98,10 +97,8 @@ src/pipeline/pipeline.py          ← Orquestrador principal
          │         data/processed/acidentes_gold/   (por ano e UF)
          │         data/processed/vitimas_silver/   (por ano)
          │         data/processed/analise_temporal/
-         │         data/processed/...
          │
-         └─► src/pipeline/ml.py          ← (opcional) Modelos de Machine Learning
-                   Prevê gravidade de lesão por Decision Tree / MLP / SVC
+         └─► doc/relatorio_sazonalidade.md ← Documento dinâmico de análise acadêmica
 
 streamlit run app/dashboard.py
          │
