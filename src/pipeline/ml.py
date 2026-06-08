@@ -101,8 +101,8 @@ def prepare_features(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, dict]:
         else:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    X = df[FEATURES].astype(float).values
-    y = df[TARGET].astype(str).values
+    X = df[FEATURES].astype(float).to_numpy(dtype=np.float64)
+    y = df[TARGET].astype(str).to_numpy(dtype=object)
     return X, y, encoders
 
 

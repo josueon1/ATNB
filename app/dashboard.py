@@ -277,12 +277,12 @@ st.divider()
 # ═══════════════════════════════════════════════════════════════════════════════
 # TABS PRINCIPAIS
 # ═══════════════════════════════════════════════════════════════════════════════
-tab_geral, tab_temporal, tab_corr, tab_fatores, tab_ml = st.tabs([
+tab_geral, tab_temporal, tab_corr, tab_fatores, tab_ts = st.tabs([
     "🗺️ Visão Geral",
     "📈 Evolução Temporal",
     "🔗 Correlação & Indicadores",
     "⚠️ Fatores & Causas",
-    "🤖 Análise Preditiva (ML)",
+    "📊 Previsão e Tendência",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -617,51 +617,69 @@ with tab_temporal:
     st.plotly_chart(fig_dia, width='stretch')
 
 # ══════════════════════════════════════════════════════════════════════════════
+# TAB 6 — PREVISÃO E TENDÊNCIA
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_ts:
+    st.subheader("Análise Preditiva e Decomposição Sazonal")
+    st.markdown("Esta seção utiliza dados contínuos de acidentes agregados por mês/ano. Os modelos estatísticos ajudam a identificar a tendência global, isolar flutuações sazonais e prever cenários futuros.")
+
+    import statsmodels.api as sm
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+    import pandas as pd
+    
+    try:
+        ts_df = pd.read_parquet(PROCESSED_DIR / "analise_temporal" / "por_ano_mes.parquet")
+        ts_df['data'] = pd.to_datetime(ts_df['data'])
+        ts_df = ts_df.set_index('data')
+        
+        # O modelo precisa de uma frequência definida
+        ts_df = ts_df.asfreq('MS')
+
+        # Decomposição STL
+        st.markdown("### Decomposição Sazonal (Tendência e Sazonalidade)")
+        st.caption("A decomposição separa o volume real em três partes: o que é Tendência Histórica, o que é Sazonalidade (padrões de meses específicos) e os Resíduos (anomalias).")
+        
+        decomp = sm.tsa.seasonal_decompose(ts_df['total_acidentes'].dropna(), model='additive')
+        
+        fig_decomp = go.Figure()
+        fig_decomp.add_trace(go.Scatter(x=decomp.trend.index, y=decomp.trend, name="Tendência", line=dict(color="#3b82f6", width=3)))
+        fig_decomp.add_trace(go.Scatter(x=decomp.seasonal.index, y=decomp.seasonal, name="Sazonalidade", line=dict(color="#f59e0b")))
+        fig_decomp.add_trace(go.Scatter(x=decomp.resid.index, y=decomp.resid, name="Resíduos (Ruído)", mode='markers', marker=dict(color="#ef4444", size=4)))
+        
+        fig_decomp.update_layout(height=450, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        st.plotly_chart(fig_decomp, width='stretch')
+
+        st.divider()
+
+        # Previsão Holt-Winters
+        st.markdown("### Previsão para os próximos 12 meses (Holt-Winters)")
+        st.caption("Projeção baseada em suavização exponencial, respeitando a tendência e a sazonalidade observada no histórico.")
+        
+        hw_model = ExponentialSmoothing(
+            ts_df['total_acidentes'].dropna(),
+            trend='add',
+            seasonal='add',
+            seasonal_periods=12
+        ).fit()
+        
+        forecast = hw_model.forecast(12)
+        forecast_idx = pd.date_range(start=ts_df.index[-1] + pd.DateOffset(months=1), periods=12, freq='MS')
+        
+        fig_fcst = go.Figure()
+        fig_fcst.add_trace(go.Scatter(x=ts_df.index, y=ts_df['total_acidentes'], name="Histórico Real", line=dict(color="#94a3b8")))
+        fig_fcst.add_trace(go.Scatter(x=forecast_idx, y=forecast, name="Previsão (12 meses)", line=dict(color="#8b5cf6", dash="dot", width=3)))
+        
+        fig_fcst.update_layout(height=400, yaxis_title="Total de Acidentes", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        st.plotly_chart(fig_fcst, width='stretch')
+
+    except Exception as e:
+        st.error(f"Erro ao carregar ou processar séries temporais: {e}")
+
+# ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — CORRELAÇÃO & INDICADORES
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_corr:
 
-    # ── Matriz de Correlação ─────────────────────────────────────────────────
-    st.subheader("Matriz de Correlação entre Indicadores")
-    st.caption(
-        "Coeficiente de Pearson (−1 a +1). "
-        "Valores próximos de +1 = correlação positiva forte; "
-        "próximos de 0 = sem relação linear; próximos de −1 = correlação negativa. "
-        "Use os filtros de UF/Ano para explorar padrões regionais."
-    )
-
-    _corr_cols = {
-        "total_acidentes":  "Acidentes",
-        "total_obitos":     "Óbitos",
-        "total_feridos":    "Feridos",
-        "acidentes_chuva":  "Em chuva",
-        "acidentes_noite":  "À noite",
-    }
-
-    _df_corr_matrix = (
-        df_ranking[list(_corr_cols.keys())]
-        .rename(columns=_corr_cols)
-        .corr(numeric_only=True)
-    )
-
-    fig_matrix = px.imshow(
-        _df_corr_matrix,
-        text_auto=".2f",
-        color_continuous_scale="RdBu_r",
-        zmin=-1,
-        zmax=1,
-        aspect="auto",
-        labels={"color": "Pearson r"},
-        height=480,
-    )
-    fig_matrix.update_traces(textfont_size=13)
-    fig_matrix.update_layout(
-        margin=dict(l=10, r=10, t=10, b=10),
-        coloraxis_colorbar=dict(title="r", tickvals=[-1, -0.5, 0, 0.5, 1]),
-    )
-    st.plotly_chart(fig_matrix, width='stretch')
-
-    st.divider()
 
     # ── Correlação: Frota x Acidentes ────────────────────────────────────────
     st.subheader("Correlação: Frota Circulante × Total de Acidentes por Município")
@@ -676,23 +694,14 @@ with tab_corr:
     ].copy()
     if uf_sel:
         df_corr_plot = df_corr_plot[df_corr_plot["uf_acidente"].isin(uf_sel)]
+    
+    # Aplicar o filtro de Top N usando EXATAMENTE a mesma lista de municípios do ranking geral
+    top_municipios = df_ranking.head(top_n)["municipio"].unique()
+    df_corr_plot = df_corr_plot[df_corr_plot["municipio"].isin(top_municipios)]
+
     # correlacao_frota não tem coluna de ano; exibimos nota quando filtro de ano está ativo
     if ano_sel != "Todos":
         st.caption(f"ℹ️ O gráfico de frota usa dados históricos agregados — o filtro de ano não se aplica aqui.")
-
-    # Linha de tendência (OLS) em escala log
-    _lx = np.log10(df_corr_plot["frota_circulante"])
-    _ly = np.log10(df_corr_plot["total_acidentes"])
-    _coef = np.polyfit(_lx, _ly, 1)
-
-    import scipy.stats as stats
-    r_val, p_val = stats.pearsonr(_lx, _ly)
-    r_squared = r_val ** 2
-    p_text = "p < 0.001" if p_val < 0.001 else f"p = {p_val:.3f}"
-
-    _x_range = np.linspace(_lx.min(), _lx.max(), 100)
-    _trend_x = 10 ** _x_range
-    _trend_y = 10 ** np.polyval(_coef, _x_range)
 
     fig_corr = px.scatter(
         df_corr_plot,
@@ -712,20 +721,36 @@ with tab_corr:
         },
         height=460,
     )
-    fig_corr.add_trace(go.Scatter(
-        x=_trend_x, y=_trend_y,
-        mode="lines",
-        name=f"Tendência (β={_coef[0]:.2f}, R²={r_squared:.2f}, {p_text})",
-        line=dict(color="black", width=2, dash="dash"),
-    ))
+
+    if len(df_corr_plot) > 1:
+        # Linha de tendência (OLS) em escala log
+        _lx = np.log10(df_corr_plot["frota_circulante"])
+        _ly = np.log10(df_corr_plot["total_acidentes"])
+        _coef = np.polyfit(_lx, _ly, 1)
+
+        import scipy.stats as stats
+        r_val, p_val = stats.pearsonr(_lx, _ly)
+        r_squared = r_val ** 2
+        p_text = "p < 0.001" if p_val < 0.001 else f"p = {p_val:.3f}"
+
+        _x_range = np.linspace(_lx.min(), _lx.max(), 100)
+        _trend_x = 10 ** _x_range
+        _trend_y = 10 ** np.polyval(_coef, _x_range)
+
+        fig_corr.add_trace(go.Scatter(
+            x=_trend_x, y=_trend_y,
+            mode="lines",
+            name=f"Tendência (β={_coef[0]:.2f}, R²={r_squared:.2f}, {p_text})",
+            line=dict(color="black", width=2, dash="dash"),
+        ))
     fig_corr.update_layout(margin=dict(t=10, b=10))
     st.plotly_chart(fig_corr, width='stretch')
 
     st.divider()
 
     # ── Distribuição dos índices por UF (Box plot) ────────────────────────────
-    st.subheader("Distribuição da Taxa de Acidentes por 100k hab. — por UF")
-    _df_box = df_ranking.dropna(subset=["taxa_acidente_100k"])
+    st.subheader(f"Distribuição da Taxa de Acidentes por 100k hab. (Top {top_n} Municípios)")
+    _df_box = df_ranking.dropna(subset=["taxa_acidente_100k"]).head(top_n)
     _uf_order = (
         _df_box.groupby("uf_acidente", observed=True)["taxa_acidente_100k"]
         .median()
@@ -737,6 +762,7 @@ with tab_corr:
         x="uf_acidente",
         y="taxa_acidente_100k",
         color="uf_acidente",
+        points="all",
         category_orders={"uf_acidente": _uf_order},
         labels={"uf_acidente": "UF", "taxa_acidente_100k": "Taxa/100k hab."},
         height=440,
@@ -756,44 +782,6 @@ with tab_fatores:
         _gdf = load_gold_uf(tuple(sorted(uf_sel)))
         _vdf = load_vitimas_uf(tuple(sorted(uf_sel)))
 
-        # ── KPIs de Causas ───────────────────────────────────────────────────────
-        st.markdown("#### Fatores de Risco — Acidentes por Causa")
-
-        _COND_ADVERSE = [
-            "CHUVA", "NUBLADO", "GAROACHUVISCO",
-            "NEVOEIRO  NEVOA OU FUMACA", "VENTOS FORTES", "NEVE", "GRANIZO",
-        ]
-
-        _acid_alcool  = int(_vdf[_vdf["susp_alcool"] == "SIM"]["num_acidente"].nunique())
-        _acid_buraco  = int(_gdf[_gdf["cond_pista"] == "COM BURACO"]["qtde_acidente"].sum())
-        _acid_molhada = int(_gdf[_gdf["cond_pista"].isin(["MOLHADA", "ESCORREGADIA"])]["qtde_acidente"].sum())
-        _acid_meteo   = int(_gdf[_gdf["cond_meteorologica"].isin(_COND_ADVERSE)]["qtde_acidente"].sum())
-        _veic_pred    = _gdf["veiculo_predominante"].dropna().mode()
-        _veic_top     = _veic_pred.iloc[0].title() if len(_veic_pred) > 0 else "N/D"
-
-        ca1, ca2, ca3, ca4 = st.columns(4)
-        ca1.metric("Bebida Alcoólica", f"{_acid_alcool:,.0f}",
-                   help="Acidentes com suspeita de álcool/entorpecente (susp_alcool = SIM)")
-        ca2.metric("Buracos na Pista", f"{_acid_buraco:,.0f}",
-                   help="cond_pista = COM BURACO")
-        ca3.metric("Pista Molhada", f"{_acid_molhada:,.0f}",
-                   help="cond_pista = MOLHADA ou ESCORREGADIA")
-        ca4.metric("Cond. Meteorológicas", f"{_acid_meteo:,.0f}",
-                   help="Chuva, nevoeiro, granizo, neve ou ventos fortes")
-
-        cb1, cb2, cb3, cb4 = st.columns(4)
-        cb1.metric("Veículo Predominante", _veic_top,
-                   help="Tipo de veículo com maior participação nos acidentes da UF")
-        cb2.metric("Entorpecentes", f"{_acid_alcool:,.0f}",
-                   help="Base SENATRAN não distingue álcool de outras drogas — mesmo indicador")
-        cb3.metric("Defeitos no Veículo", "N/D",
-                   help="Dado não disponível na base SENATRAN/RENAEST")
-        cb4.metric("Falta de Sinalização", "N/D",
-                   help="Dado não disponível na base SENATRAN/RENAEST")
-
-        st.caption("Fontes: SENATRAN/RENAEST — acidentes_gold e vitimas_silver. N/D = dado não coletado.")
-
-        st.divider()
 
         # ── Tipos de Acidentes ────────────────────────────────────────────────────
         st.markdown("#### Tipos de Acidentes")
@@ -850,33 +838,6 @@ with tab_fatores:
 
         st.divider()
 
-        # ── Veículos Envolvidos ───────────────────────────────────────────────────
-        st.markdown("#### Acidentes por Tipo de Veículo")
-
-        df_veic = (
-            _gdf.groupby("veiculo_predominante", observed=True)
-            .agg(total_acidentes=("qtde_acidente", "sum"))
-            .reset_index()
-            .dropna(subset=["veiculo_predominante"])
-            .sort_values("total_acidentes", ascending=False)
-            .head(12)
-        )
-        fig_veic = px.bar(
-            df_veic.sort_values("total_acidentes"),
-            x="total_acidentes",
-            y="veiculo_predominante",
-            orientation="h",
-            text="total_acidentes",
-            color="total_acidentes",
-            color_continuous_scale="Greens",
-            labels={"total_acidentes": "Acidentes", "veiculo_predominante": "Tipo de Veículo"},
-            height=440,
-        )
-        fig_veic.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
-        fig_veic.update_layout(margin=dict(l=0, r=30, t=10, b=10), coloraxis_showscale=False)
-        st.plotly_chart(fig_veic, width='stretch')
-
-        st.divider()
 
         # ── Bairros e Ruas com Mais Acidentes ─────────────────────────────────────
         st.markdown("#### Bairros e Ruas com Maior Número de Acidentes")
@@ -943,96 +904,3 @@ with tab_fatores:
                     "Re-execute o pipeline para incluir este campo."
                 )
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — ANÁLISE PREDITIVA (ML)
-# ══════════════════════════════════════════════════════════════════════════════
-
-@st.cache_resource(show_spinner="Treinando modelos de Machine Learning (apenas uma vez)...")
-def get_ml_models_v2():
-    from src.pipeline.ml import run_ml_pipeline
-    # Executa apenas nos dados de 2023 com 15k amostras para ser performático
-    return run_ml_pipeline(PROCESSED_DIR, ano=2023, sample_n=15000)
-
-with tab_ml:
-    st.subheader("Modelos de Machine Learning: Previsão de Gravidade da Lesão")
-    st.markdown(
-        "Esta aba treina classificadores (Decision Tree, MLP, SVC) na base de vítimas "
-        "para identificar quais fatores melhor preveem a gravidade da lesão (Sem Ferimento, "
-        "Leve, Grave ou Óbito)."
-    )
-
-    res = get_ml_models_v2()
-    
-    m1, m2, m3 = st.columns(3)
-    if "dt" in res:
-        m1.metric("Decision Tree (Acurácia)", f"{res['dt']['acuracia']:.1%}")
-    if "mlp" in res:
-        m2.metric("MLP Classifier (Acurácia)", f"{res['mlp']['acuracia']:.1%}")
-    if "svc" in res:
-        m3.metric("SVC (Acurácia)", f"{res['svc']['acuracia']:.1%}")
-    
-    if "dt" in res:
-        st.info(f"**O que isso significa?** A nossa Inteligência Artificial previu corretamente o destino das vítimas em **{res['dt']['acuracia']:.1%}** dos acidentes reais testados.")
-        
-        human_names = {
-            "susp_alcool": "Suspeita de Álcool",
-            "tp_envolvido": "Condição (Pedestre/Motorista/Passageiro)",
-            "mes_acidente": "Mês do Acidente (Sazonalidade)",
-            "faixa_idade": "Faixa de Idade",
-            "equip_seguranca": "Uso de Cinto/Capacete",
-            "genero": "Gênero",
-            "ind_motorista": "Era Motorista?"
-        }
-        
-        st.markdown("#### Os Maiores Culpados (Importância das Variáveis)")
-        feat_imp = pd.Series(res['dt']['feature_importances']).sort_values(ascending=True)
-        feat_imp.index = feat_imp.index.map(lambda x: human_names.get(x, x))
-        fig_imp = px.bar(
-            x=feat_imp.values,
-            y=feat_imp.index,
-            orientation="h",
-            labels={"x": "Peso na Decisão", "y": "Característica"},
-            title="O que mais transforma um acidente em fatal?"
-        )
-        st.plotly_chart(fig_imp, use_container_width=True)
-        
-    st.divider()
-    
-    st.markdown("### 🎮 Simulador de Risco (Machine Learning na Prática)")
-    st.markdown("Crie um cenário fictício abaixo e veja se a nossa Inteligência Artificial prevê que a vítima sai ilesa ou entra em óbito.")
-    
-    encoders = res.get("encoders", {})
-    features = res.get("features", [])
-    
-    with st.form("simulador_form"):
-        col1, col2 = st.columns(2)
-        user_input = {}
-        for i, feat in enumerate(features):
-            target_col = col1 if i % 2 == 0 else col2
-            label = human_names.get(feat, feat) if "dt" in res else feat
-            if feat in encoders:
-                options = list(encoders[feat].classes_)
-                user_input[feat] = target_col.selectbox(label, options)
-            else:
-                user_input[feat] = target_col.number_input(label, value=0)
-        
-        submitted = st.form_submit_button("Consultar Oráculo (Gerar Previsão)", type="primary")
-        if submitted:
-            x_sim = []
-            for feat in features:
-                if feat in encoders:
-                    if user_input[feat] in encoders[feat].classes_:
-                        x_sim.append(encoders[feat].transform([user_input[feat]])[0])
-                    else:
-                        x_sim.append(0)
-                else:
-                    x_sim.append(user_input[feat])
-            
-            pred = res["dt"]["clf"].predict(np.array([x_sim]))[0]
-            
-            if pred == "OBITO":
-                st.error(f"🚨 A IA analisou este perfil e a previsão é: **{pred}**")
-            elif pred == "GRAVE":
-                st.warning(f"⚠️ A IA analisou este perfil e a previsão é: **{pred}**")
-            else:
-                st.success(f"✅ A IA analisou este perfil e a previsão é: **{pred}**")
