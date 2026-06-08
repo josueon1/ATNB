@@ -4,3 +4,5 @@ plotly
 pyarrow
 dask[dataframe]
 numpy
+scipy
+statsmodels
