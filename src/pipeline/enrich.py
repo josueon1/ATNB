@@ -207,6 +207,7 @@ def build_analise_temporal(df_gold: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """
     Retorna dicionário de DataFrames com distribuições temporais:
       - por_ano
+      - por_ano_mes  (série contínua para previsão / decomposição sazonal)
       - por_mes
       - por_hora
       - por_dia_semana
@@ -226,8 +227,26 @@ def build_analise_temporal(df_gold: pd.DataFrame) -> dict[str, pd.DataFrame]:
             .sort_values(group_col)
         )
 
+    por_ano_mes = (
+        df_gold.groupby(["ano_acidente", "mes_acidente"], observed=True)
+        .agg(
+            total_acidentes=("qtde_acidente", "sum"),
+            total_obitos=("qtde_obitos", "sum"),
+            total_feridos=("qtde_feridosilesos", "sum"),
+        )
+        .reset_index()
+        .sort_values(["ano_acidente", "mes_acidente"])
+    )
+    por_ano_mes["data"] = pd.to_datetime(
+        por_ano_mes["ano_acidente"].astype(str)
+        + "-"
+        + por_ano_mes["mes_acidente"].astype(str).str.zfill(2)
+        + "-01"
+    )
+
     return {
         "por_ano": _agg("ano_acidente"),
+        "por_ano_mes": por_ano_mes,
         "por_mes": _agg("mes_acidente"),
         "por_hora": _agg("hora"),
         "por_dia_semana": _agg("dia_semana"),

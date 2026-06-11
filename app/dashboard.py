@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import pyarrow.parquet as pq
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -107,17 +108,21 @@ def load_temporal_filtrado(ano: int | None, ufs: tuple) -> dict[str, pd.DataFram
     }
 
 
-@st.cache_data(show_spinner="Carregando dados por estado...")
-def load_gold_estados(ano: int | None, ufs: tuple) -> pd.DataFrame:
-    """Agrega acidentes_gold por UF para uso no mapa."""
-    filters: list = []
-    if ano is not None:
-        filters.append(("ano_acidente", "=", ano))
-    if ufs:
-        filters.append(("uf_acidente", "in", list(ufs)))
-    df = load_parquet(PROCESSED_DIR / "acidentes_gold", filters=filters or None)
+_COND_METEO_ADVERSA = [
+    "CHUVA", "NUBLADO", "GAROACHUVISCO",
+    "NEVOEIRO  NEVOA OU FUMACA", "VENTOS FORTES", "NEVE", "GRANIZO",
+]
+_PISTA_MOLHADA = ["MOLHADA", "ESCORREGADIA"]
+
+
+def _ano_filter(ano: int | None) -> list | None:
+    return [("ano_acidente", "=", int(ano))] if ano is not None else None
+
+
+def _enriquecer_com_causas(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
+    """Agrega métricas e fatores de risco por UF ou município."""
     agg = (
-        df.groupby("uf_acidente", as_index=False, observed=True)
+        df.groupby(group_cols, as_index=False, observed=True)
         .agg(
             total_acidentes=("qtde_acidente", "sum"),
             total_obitos=("qtde_obitos", "sum"),
@@ -128,38 +133,97 @@ def load_gold_estados(ano: int | None, ufs: tuple) -> pd.DataFrame:
     agg["taxa_letalidade"] = (
         (agg["total_obitos"] / agg["total_acidentes"].replace(0, pd.NA)) * 100
     ).where(mask).round(2)
+
+    fatores = {
+        "acidentes_pista_molhada": df["cond_pista"].isin(_PISTA_MOLHADA),
+        "acidentes_buraco": df["cond_pista"] == "COM BURACO",
+        "acidentes_chuva": df["cond_meteorologica"] == "CHUVA",
+        "acidentes_meteo_adversa": df["cond_meteorologica"].isin(_COND_METEO_ADVERSA),
+    }
+    for nome, mascara in fatores.items():
+        contagem = (
+            df.loc[mascara]
+            .groupby(group_cols, observed=True)["qtde_acidente"]
+            .sum()
+            .rename(nome)
+        )
+        agg = agg.merge(contagem, on=group_cols, how="left")
+
+    tipo_rank = (
+        df.groupby(group_cols + ["tp_acidente"], observed=True)["qtde_acidente"]
+        .sum()
+        .reset_index()
+        .sort_values(group_cols + ["qtde_acidente"], ascending=[True] * len(group_cols) + [False])
+    )
+    principal = tipo_rank.drop_duplicates(group_cols)[group_cols + ["tp_acidente"]]
+    principal = principal.rename(columns={"tp_acidente": "causa_principal"})
+    agg = agg.merge(principal, on=group_cols, how="left")
+
+    for col in fatores:
+        agg[col] = agg[col].fillna(0).astype(int)
+
+    agg["causa_principal"] = agg["causa_principal"].fillna("N/D").astype(str)
+    return agg
+
+
+@st.cache_data(show_spinner="Carregando dados por estado...")
+def load_estados_com_causas(ano: int | None) -> pd.DataFrame:
+    """Agrega acidentes e fatores de risco por UF para o mapa."""
+    table = pq.read_table(
+        str(PROCESSED_DIR / "acidentes_gold"),
+        columns=[
+            "uf_acidente", "qtde_acidente", "qtde_obitos", "qtde_feridosilesos",
+            "tp_acidente", "cond_pista", "cond_meteorologica",
+        ],
+        filters=_ano_filter(ano),
+    )
+    agg = _enriquecer_com_causas(table.to_pandas(), ["uf_acidente"])
+
+    vt = pq.read_table(
+        str(PROCESSED_DIR / "vitimas_silver"),
+        columns=["uf_acidente", "num_acidente", "susp_alcool"],
+        filters=_ano_filter(ano),
+    )
+    emb = (
+        vt.to_pandas()
+        .query("susp_alcool == 'SIM'")
+        .groupby("uf_acidente", observed=True)["num_acidente"]
+        .nunique()
+        .rename("acidentes_embriaguez")
+    )
+    agg = agg.merge(emb, on="uf_acidente", how="left")
+    agg["acidentes_embriaguez"] = agg["acidentes_embriaguez"].fillna(0).astype(int)
     return agg
 
 
 @st.cache_data(show_spinner="Carregando dados municipais...")
-def load_gold_municipios(ano: int | None, ufs: tuple) -> pd.DataFrame:
-    """Agrega acidentes_gold por município com coordenadas (para scatter_mapbox)."""
+def load_municipios_com_causas(ano: int | None, ufs: tuple) -> pd.DataFrame:
+    """Agrega acidentes e fatores de risco por município (scatter_mapbox)."""
     filters: list = []
     if ano is not None:
-        filters.append(("ano_acidente", "=", ano))
+        filters.append(("ano_acidente", "=", int(ano)))
     if ufs:
         filters.append(("uf_acidente", "in", list(ufs)))
-    df = load_parquet(PROCESSED_DIR / "acidentes_gold", filters=filters or None)
+    table = pq.read_table(
+        str(PROCESSED_DIR / "acidentes_gold"),
+        columns=[
+            "municipio", "uf_acidente", "num_acidente", "qtde_acidente",
+            "qtde_obitos", "qtde_feridosilesos", "tp_acidente", "cond_pista",
+            "cond_meteorologica", "latitude_acidente", "longitude_acidente",
+        ],
+        filters=filters or None,
+    )
+    df = table.to_pandas()
     df = df[
         df["latitude_acidente"].notna() & (df["latitude_acidente"] != 0) &
         df["longitude_acidente"].notna() & (df["longitude_acidente"] != 0)
     ]
-    agg = (
+    coords = (
         df.groupby(["municipio", "uf_acidente"], as_index=False, observed=True)
-        .agg(
-            total_acidentes=("qtde_acidente", "sum"),
-            total_obitos=("qtde_obitos", "sum"),
-            total_feridos=("qtde_feridosilesos", "sum"),
-            lat=("latitude_acidente", "mean"),
-            lon=("longitude_acidente", "mean"),
-        )
-        .dropna(subset=["lat", "lon"])
+        .agg(lat=("latitude_acidente", "mean"), lon=("longitude_acidente", "mean"))
     )
-    mask = agg["total_acidentes"] > 0
-    agg["taxa_letalidade"] = (
-        (agg["total_obitos"] / agg["total_acidentes"].replace(0, pd.NA)) * 100
-    ).where(mask).round(2)
-    return agg
+    agg = _enriquecer_com_causas(df, ["municipio", "uf_acidente"])
+    return agg.merge(coords, on=["municipio", "uf_acidente"], how="left").dropna(subset=["lat", "lon"])
 
 
 @st.cache_data(show_spinner=False)
@@ -306,20 +370,26 @@ with tab_geral:
         "Taxa de Letalidade (%)": "taxa_letalidade",
     }[_metrica_mapa]
 
+    df_estados = load_estados_com_causas(_ano_mapa)
+
     _labels_mapa = {
         "total_acidentes": "Acidentes",
         "total_obitos": "Óbitos",
         "taxa_letalidade": "Letalidade (%)",
         "uf_acidente": "UF",
         "municipio": "Município",
+        "causa_principal": "Causa principal",
+        "acidentes_embriaguez": "Embriaguez",
+        "acidentes_pista_molhada": "Pista molhada",
+        "acidentes_chuva": "Chuva",
+        "acidentes_buraco": "Buracos",
     }
 
     # ── Mapa estadual — sempre visível (visão nacional) ───────────────────────
     st.subheader("Visão Nacional por Estado")
-    df_estados = load_gold_estados(_ano_mapa, ())   # sempre todos os estados
+    st.caption("Passe o mouse sobre um estado para ver as principais causas dos acidentes na região.")
     if GEOJSON_PATH.exists():
         _geojson = load_geojson()
-        # Destaca UFs selecionadas com marcador
         df_estados["_selecionado"] = df_estados["uf_acidente"].isin(uf_sel) if uf_sel else False
         fig_mapa = px.choropleth(
             df_estados,
@@ -329,15 +399,31 @@ with tab_geral:
             color=_col_mapa,
             color_continuous_scale="YlOrRd",
             hover_name="uf_acidente",
-            hover_data={
-                "total_acidentes": ":,.0f",
-                "total_obitos": ":,.0f",
-                "taxa_letalidade": ":.2f",
-            },
+            custom_data=[
+                "total_acidentes", "total_obitos", "taxa_letalidade",
+                "causa_principal", "acidentes_embriaguez", "acidentes_pista_molhada",
+                "acidentes_chuva", "acidentes_buraco",
+            ],
             labels=_labels_mapa,
             fitbounds="locations",
             basemap_visible=False,
             height=480,
+        )
+        fig_mapa.update_traces(
+            hovertemplate=(
+                "<b>%{location}</b><br>"
+                f"{_metrica_mapa}: %{{z:,.2f}}<br>"
+                "Acidentes: %{customdata[0]:,.0f}<br>"
+                "Óbitos: %{customdata[1]:,.0f}<br>"
+                "Letalidade: %{customdata[2]:.1f}%<br>"
+                "<br><b>Principais causas</b><br>"
+                "Tipo mais frequente: %{customdata[3]}<br>"
+                "Embriaguez: %{customdata[4]:,.0f}<br>"
+                "Pista molhada: %{customdata[5]:,.0f}<br>"
+                "Chuva: %{customdata[6]:,.0f}<br>"
+                "Buracos na pista: %{customdata[7]:,.0f}"
+                "<extra></extra>"
+            ),
         )
         # Borda destacada nas UFs selecionadas
         if uf_sel:
@@ -368,6 +454,24 @@ with tab_geral:
             geo=dict(bgcolor="rgba(0,0,0,0)"),
         )
         st.plotly_chart(fig_mapa, width='stretch')
+
+        st.markdown("#### Causas na região selecionada")
+        _ufs_causa_opts = sorted(df_estados["uf_acidente"].tolist())
+        _default_uf = sorted(uf_sel)[0] if uf_sel else _ufs_causa_opts[0]
+        _uf_causa = st.selectbox(
+            "Estado",
+            options=_ufs_causa_opts,
+            index=_ufs_causa_opts.index(_default_uf),
+            key="uf_causas_mapa",
+        )
+        _row_uf = df_estados.loc[df_estados["uf_acidente"] == _uf_causa].iloc[0]
+        cc1, cc2, cc3, cc4, cc5, cc6 = st.columns(6)
+        cc1.metric("Causa principal", _row_uf["causa_principal"].title())
+        cc2.metric("Embriaguez", f"{_row_uf['acidentes_embriaguez']:,.0f}")
+        cc3.metric("Pista molhada", f"{_row_uf['acidentes_pista_molhada']:,.0f}")
+        cc4.metric("Chuva", f"{_row_uf['acidentes_chuva']:,.0f}")
+        cc5.metric("Buracos", f"{_row_uf['acidentes_buraco']:,.0f}")
+        cc6.metric("Meteo. adversa", f"{_row_uf['acidentes_meteo_adversa']:,.0f}")
     else:
         st.warning("GeoJSON não encontrado em data/geojson/br_states.json.")
 
@@ -375,7 +479,7 @@ with tab_geral:
     if uf_sel:
         st.divider()
         st.subheader(f"Detalhe por Município — {', '.join(sorted(uf_sel))}")
-        df_munic = load_gold_municipios(_ano_mapa, _ufs_mapa)
+        df_munic = load_municipios_com_causas(_ano_mapa, _ufs_mapa)
         if df_munic.empty:
             st.info("Sem dados municipais com coordenadas para os filtros selecionados.")
         else:
@@ -395,6 +499,10 @@ with tab_geral:
                     "total_acidentes": ":,.0f",
                     "total_obitos": ":,.0f",
                     "taxa_letalidade": ":.2f",
+                    "causa_principal": True,
+                    "acidentes_pista_molhada": ":,.0f",
+                    "acidentes_chuva": ":,.0f",
+                    "acidentes_buraco": ":,.0f",
                     "lat": False,
                     "lon": False,
                 },

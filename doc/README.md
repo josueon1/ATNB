@@ -137,6 +137,14 @@ python -m src.pipeline.pipeline --ano 2023
 ### 3. Rodar o Dashboard
 
 ```bash
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+```basho
+pip install -r requirements.txt
+```
+
+```bash
 streamlit run app/dashboard.py
 ```
 
