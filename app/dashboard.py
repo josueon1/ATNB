@@ -108,6 +108,74 @@ def load_temporal_filtrado(ano: int | None, ufs: tuple) -> dict[str, pd.DataFram
     }
 
 
+@st.cache_data(show_spinner="Carregando fatores temporais...")
+def load_fatores_temporais(ano: int | None, ufs: tuple, agrupar_por: str = "mes") -> pd.DataFrame:
+    filters = []
+    if ano is not None and agrupar_por == "mes":
+        filters.append(("ano_acidente", "=", int(ano)))
+    if ufs:
+        filters.append(("uf_acidente", "in", list(ufs)))
+
+    table = pq.read_table(
+        str(PROCESSED_DIR / "acidentes_gold"),
+        columns=["ano_acidente", "mes_acidente", "qtde_acidente", "qtde_obitos", "cond_pista", "cond_meteorologica"],
+        filters=filters or None,
+    )
+    df = table.to_pandas()
+
+    vt_filters = []
+    if ano is not None and agrupar_por == "mes":
+        vt_filters.append(("ano_acidente", "=", int(ano)))
+    if ufs:
+        vt_filters.append(("uf_acidente", "in", list(ufs)))
+
+    vt_table = pq.read_table(
+        str(PROCESSED_DIR / "vitimas_silver"),
+        columns=["ano_acidente", "mes_acidente", "num_acidente", "susp_alcool", "qtde_obitos"],
+        filters=vt_filters or None,
+    )
+    vt_df = vt_table.to_pandas()
+
+    group_col = "mes_acidente" if agrupar_por == "mes" else "ano_acidente"
+
+    emb = (
+        vt_df.query("susp_alcool == 'SIM'")
+        .groupby(group_col, observed=True)
+        .agg(
+            acidentes_embriaguez=("num_acidente", "nunique"),
+            obitos_embriaguez=("qtde_obitos", "sum")
+        )
+        .reset_index()
+    )
+
+    conds = {
+        "pista_molhada": df["cond_pista"].isin(_PISTA_MOLHADA),
+        "buraco": df["cond_pista"] == "COM BURACO",
+        "chuva": df["cond_meteorologica"] == "CHUVA",
+        "meteo_adversa": df["cond_meteorologica"].isin(_COND_METEO_ADVERSA),
+    }
+
+    group_vals = sorted(df[group_col].dropna().unique())
+    res = []
+    for val in group_vals:
+        row = {group_col: val}
+        for name, mask in conds.items():
+            sub_acidentes = df.loc[mask & (df[group_col] == val), "qtde_acidente"].sum()
+            sub_obitos = df.loc[mask & (df[group_col] == val), "qtde_obitos"].sum()
+            row[f"acidentes_{name}"] = int(sub_acidentes)
+            row[f"obitos_{name}"] = int(sub_obitos)
+        res.append(row)
+
+    df_agg = pd.DataFrame(res)
+    if not df_agg.empty:
+        df_agg = df_agg.merge(emb, on=group_col, how="left")
+        df_agg = df_agg.fillna(0)
+        for col in df_agg.columns:
+            if col != group_col:
+                df_agg[col] = df_agg[col].astype(int)
+    return df_agg
+
+
 _COND_METEO_ADVERSA = [
     "CHUVA", "NUBLADO", "GAROACHUVISCO",
     "NEVOEIRO  NEVOA OU FUMACA", "VENTOS FORTES", "NEVE", "GRANIZO",
@@ -115,8 +183,13 @@ _COND_METEO_ADVERSA = [
 _PISTA_MOLHADA = ["MOLHADA", "ESCORREGADIA"]
 
 
-def _ano_filter(ano: int | None) -> list | None:
-    return [("ano_acidente", "=", int(ano))] if ano is not None else None
+def _date_filter(ano: int | None, mes: int | None) -> list | None:
+    filters = []
+    if ano is not None:
+        filters.append(("ano_acidente", "=", int(ano)))
+    if mes is not None:
+        filters.append(("mes_acidente", "=", int(mes)))
+    return filters or None
 
 
 def _enriquecer_com_causas(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
@@ -149,6 +222,15 @@ def _enriquecer_com_causas(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFr
         )
         agg = agg.merge(contagem, on=group_cols, how="left")
 
+        nome_obitos = nome.replace("acidentes_", "obitos_")
+        contagem_obitos = (
+            df.loc[mascara]
+            .groupby(group_cols, observed=True)["qtde_obitos"]
+            .sum()
+            .rename(nome_obitos)
+        )
+        agg = agg.merge(contagem_obitos, on=group_cols, how="left")
+
     tipo_rank = (
         df.groupby(group_cols + ["tp_acidente"], observed=True)["qtde_acidente"]
         .sum()
@@ -161,47 +243,93 @@ def _enriquecer_com_causas(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFr
 
     for col in fatores:
         agg[col] = agg[col].fillna(0).astype(int)
+        nome_obitos = col.replace("acidentes_", "obitos_")
+        agg[nome_obitos] = agg[nome_obitos].fillna(0).astype(int)
 
     agg["causa_principal"] = agg["causa_principal"].fillna("N/D").astype(str)
     return agg
 
 
 @st.cache_data(show_spinner="Carregando dados por estado...")
-def load_estados_com_causas(ano: int | None) -> pd.DataFrame:
+def load_estados_com_causas(ano: int | None, mes: int | None = None) -> pd.DataFrame:
     """Agrega acidentes e fatores de risco por UF para o mapa."""
     table = pq.read_table(
         str(PROCESSED_DIR / "acidentes_gold"),
         columns=[
-            "uf_acidente", "qtde_acidente", "qtde_obitos", "qtde_feridosilesos",
+            "num_acidente", "uf_acidente", "qtde_acidente", "qtde_obitos", "qtde_feridosilesos",
             "tp_acidente", "cond_pista", "cond_meteorologica",
         ],
-        filters=_ano_filter(ano),
+        filters=_date_filter(ano, mes),
     )
-    agg = _enriquecer_com_causas(table.to_pandas(), ["uf_acidente"])
+    ac_df = table.to_pandas()
+    agg = _enriquecer_com_causas(ac_df, ["uf_acidente"])
 
     vt = pq.read_table(
         str(PROCESSED_DIR / "vitimas_silver"),
-        columns=["uf_acidente", "num_acidente", "susp_alcool"],
-        filters=_ano_filter(ano),
+        columns=["uf_acidente", "num_acidente", "susp_alcool", "genero", "qtde_obitos"],
+        filters=_date_filter(ano, mes),
     )
+    vt_df = vt.to_pandas()
     emb = (
-        vt.to_pandas()
+        vt_df
         .query("susp_alcool == 'SIM'")
-        .groupby("uf_acidente", observed=True)["num_acidente"]
-        .nunique()
-        .rename("acidentes_embriaguez")
+        .groupby("uf_acidente", observed=True)
+        .agg(
+            acidentes_embriaguez=("num_acidente", "nunique"),
+            obitos_embriaguez=("qtde_obitos", "sum")
+        )
     )
     agg = agg.merge(emb, on="uf_acidente", how="left")
     agg["acidentes_embriaguez"] = agg["acidentes_embriaguez"].fillna(0).astype(int)
+    agg["obitos_embriaguez"] = agg["obitos_embriaguez"].fillna(0).astype(int)
+
+    # Merge victims with accident conditions for gender breakdown
+    merged = vt_df.merge(
+        ac_df[["num_acidente", "cond_pista", "cond_meteorologica"]],
+        on="num_acidente",
+        how="inner"
+    )
+
+    merged["is_pista_molhada"] = merged["cond_pista"].isin(_PISTA_MOLHADA)
+    merged["is_buraco"] = merged["cond_pista"] == "COM BURACO"
+    merged["is_chuva"] = merged["cond_meteorologica"] == "CHUVA"
+    merged["is_meteo_adversa"] = merged["cond_meteorologica"].isin(_COND_METEO_ADVERSA)
+    merged["is_embriaguez"] = merged["susp_alcool"] == "SIM"
+
+    m_mask = merged["genero"] == "MASCULINO"
+    f_mask = merged["genero"] == "FEMININO"
+
+    factors = ["embriaguez", "pista_molhada", "chuva", "buraco", "meteo_adversa"]
+    for f in factors:
+        mask = merged[f"is_{f}"]
+        
+        env_m = merged[mask & m_mask].groupby("uf_acidente", observed=True).size().rename(f"env_masc_{f}")
+        env_f = merged[mask & f_mask].groupby("uf_acidente", observed=True).size().rename(f"env_fem_{f}")
+        
+        obt_m = merged[mask & m_mask].groupby("uf_acidente", observed=True)["qtde_obitos"].sum().rename(f"obt_masc_{f}")
+        obt_f = merged[mask & f_mask].groupby("uf_acidente", observed=True)["qtde_obitos"].sum().rename(f"obt_fem_{f}")
+        
+        agg = agg.merge(env_m, on="uf_acidente", how="left")
+        agg = agg.merge(env_f, on="uf_acidente", how="left")
+        agg = agg.merge(obt_m, on="uf_acidente", how="left")
+        agg = agg.merge(obt_f, on="uf_acidente", how="left")
+        
+        agg[f"env_masc_{f}"] = agg[f"env_masc_{f}"].fillna(0).astype(int)
+        agg[f"env_fem_{f}"] = agg[f"env_fem_{f}"].fillna(0).astype(int)
+        agg[f"obt_masc_{f}"] = agg[f"obt_masc_{f}"].fillna(0).astype(int)
+        agg[f"obt_fem_{f}"] = agg[f"obt_fem_{f}"].fillna(0).astype(int)
+
     return agg
 
 
 @st.cache_data(show_spinner="Carregando dados municipais...")
-def load_municipios_com_causas(ano: int | None, ufs: tuple) -> pd.DataFrame:
+def load_municipios_com_causas(ano: int | None, ufs: tuple, mes: int | None = None) -> pd.DataFrame:
     """Agrega acidentes e fatores de risco por município (scatter_mapbox)."""
     filters: list = []
     if ano is not None:
         filters.append(("ano_acidente", "=", int(ano)))
+    if mes is not None:
+        filters.append(("mes_acidente", "=", int(mes)))
     if ufs:
         filters.append(("uf_acidente", "in", list(ufs)))
     table = pq.read_table(
@@ -250,15 +378,13 @@ with st.sidebar:
         5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
         9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro",
     }
-    mes_sel: int | None = None
-    if ano_sel != "Todos":
-        _mes_raw = st.selectbox(
-            "Mês de referência",
-            options=["Todos"] + list(_MESES_NOME.keys()),
-            format_func=lambda m: "Todos" if m == "Todos" else f"{m:02d} — {_MESES_NOME[m]}",
-            index=0,
-        )
-        mes_sel = None if _mes_raw == "Todos" else int(_mes_raw)
+    _mes_raw = st.selectbox(
+        "Mês de referência",
+        options=["Todos"] + list(_MESES_NOME.keys()),
+        format_func=lambda m: "Todos" if m == "Todos" else f"{m:02d} — {_MESES_NOME[m]}",
+        index=0,
+    )
+    mes_sel = None if _mes_raw == "Todos" else int(_mes_raw)
     ufs_disponiveis = sorted(ranking["uf_acidente"].dropna().unique())
     uf_sel = st.multiselect(
         "UF(s)",
@@ -370,7 +496,7 @@ with tab_geral:
         "Taxa de Letalidade (%)": "taxa_letalidade",
     }[_metrica_mapa]
 
-    df_estados = load_estados_com_causas(_ano_mapa)
+    df_estados = load_estados_com_causas(_ano_mapa, mes_sel)
 
     _labels_mapa = {
         "total_acidentes": "Acidentes",
@@ -378,7 +504,7 @@ with tab_geral:
         "taxa_letalidade": "Letalidade (%)",
         "uf_acidente": "UF",
         "municipio": "Município",
-        "causa_principal": "Causa principal",
+        "causa_principal": "Tipo mais frequente",
         "acidentes_embriaguez": "Embriaguez",
         "acidentes_pista_molhada": "Pista molhada",
         "acidentes_chuva": "Chuva",
@@ -455,23 +581,58 @@ with tab_geral:
         )
         st.plotly_chart(fig_mapa, width='stretch')
 
-        st.markdown("#### Causas na região selecionada")
-        _ufs_causa_opts = sorted(df_estados["uf_acidente"].tolist())
-        _default_uf = sorted(uf_sel)[0] if uf_sel else _ufs_causa_opts[0]
-        _uf_causa = st.selectbox(
-            "Estado",
-            options=_ufs_causa_opts,
-            index=_ufs_causa_opts.index(_default_uf),
-            key="uf_causas_mapa",
-        )
-        _row_uf = df_estados.loc[df_estados["uf_acidente"] == _uf_causa].iloc[0]
-        cc1, cc2, cc3, cc4, cc5, cc6 = st.columns(6)
-        cc1.metric("Causa principal", _row_uf["causa_principal"].title())
-        cc2.metric("Embriaguez", f"{_row_uf['acidentes_embriaguez']:,.0f}")
-        cc3.metric("Pista molhada", f"{_row_uf['acidentes_pista_molhada']:,.0f}")
-        cc4.metric("Chuva", f"{_row_uf['acidentes_chuva']:,.0f}")
-        cc5.metric("Buracos", f"{_row_uf['acidentes_buraco']:,.0f}")
-        cc6.metric("Meteo. adversa", f"{_row_uf['acidentes_meteo_adversa']:,.0f}")
+        if uf_sel:
+            df_filtrado = df_estados[df_estados["uf_acidente"].isin(uf_sel)]
+            regiao_desc = ", ".join(sorted(uf_sel))
+        else:
+            df_filtrado = df_estados
+            regiao_desc = "Brasil"
+
+        st.markdown(f"#### Fatores e causas em destaque — {regiao_desc}")
+
+        factors_data = {}
+        for f in ["embriaguez", "pista_molhada", "chuva", "buraco", "meteo_adversa"]:
+            acidentes = int(df_filtrado[f"acidentes_{f}"].sum())
+            obitos = int(df_filtrado[f"obitos_{f}"].sum())
+
+            # Gender breakdown
+            env_masc = int(df_filtrado[f"env_masc_{f}"].sum())
+            env_fem = int(df_filtrado[f"env_fem_{f}"].sum())
+            obt_masc = int(df_filtrado[f"obt_masc_{f}"].sum())
+            obt_fem = int(df_filtrado[f"obt_fem_{f}"].sum())
+
+            if _col_mapa == "total_acidentes":
+                val_str = f"{acidentes:,.0f}"
+                breakdown_str = f"♂ {env_masc:,.0f} | ♀ {env_fem:,.0f}"
+            elif _col_mapa == "total_obitos":
+                val_str = f"{obitos:,.0f}"
+                breakdown_str = f"♂ {obt_masc:,.0f} | ♀ {obt_fem:,.0f}"
+            else:  # taxa_letalidade
+                let = (obitos / acidentes * 100) if acidentes > 0 else 0
+                val_str = f"{let:.2f}%"
+                breakdown_str = f"♂ {obt_masc:,.0f} | ♀ {obt_fem:,.0f} (óbitos)"
+
+            factors_data[f] = {
+                "val": val_str,
+                "breakdown": breakdown_str
+            }
+
+        cc1, cc2, cc3, cc4, cc5 = st.columns(5)
+        with cc1:
+            st.metric("Embriaguez", factors_data["embriaguez"]["val"])
+            st.caption(factors_data["embriaguez"]["breakdown"])
+        with cc2:
+            st.metric("Pista molhada", factors_data["pista_molhada"]["val"])
+            st.caption(factors_data["pista_molhada"]["breakdown"])
+        with cc3:
+            st.metric("Chuva", factors_data["chuva"]["val"])
+            st.caption(factors_data["chuva"]["breakdown"])
+        with cc4:
+            st.metric("Buracos", factors_data["buraco"]["val"])
+            st.caption(factors_data["buraco"]["breakdown"])
+        with cc5:
+            st.metric("Meteo. adversa", factors_data["meteo_adversa"]["val"])
+            st.caption(factors_data["meteo_adversa"]["breakdown"])
     else:
         st.warning("GeoJSON não encontrado em data/geojson/br_states.json.")
 
@@ -479,7 +640,7 @@ with tab_geral:
     if uf_sel:
         st.divider()
         st.subheader(f"Detalhe por Município — {', '.join(sorted(uf_sel))}")
-        df_munic = load_municipios_com_causas(_ano_mapa, _ufs_mapa)
+        df_munic = load_municipios_com_causas(_ano_mapa, _ufs_mapa, mes_sel)
         if df_munic.empty:
             st.info("Sem dados municipais com coordenadas para os filtros selecionados.")
         else:
@@ -679,6 +840,74 @@ with tab_temporal:
         margin=dict(t=10, b=10),
     )
     st.plotly_chart(fig_mes, width='stretch')
+
+    # ── Evolução Mensal dos Fatores e Causas de Risco ─────────────────────
+    st.subheader("Evolução Mensal dos Fatores e Causas de Risco")
+    st.caption("Acompanhe o volume de acidentes e óbitos causados por fatores específicos ao longo dos meses do ano.")
+
+    _m_fatores_temp = st.radio(
+        "Métrica de fatores",
+        options=["Acidentes", "Óbitos"],
+        horizontal=True,
+        key="radio_fatores_temp",
+    )
+
+    _df_fat_temp = load_fatores_temporais(
+        None if ano_sel == "Todos" else int(ano_sel),
+        tuple(sorted(uf_sel)) if uf_sel else (),
+        agrupar_por="mes"
+    )
+
+    if not _df_fat_temp.empty:
+        # Determine cols to plot
+        cols_to_plot = [
+            "acidentes_embriaguez", "acidentes_pista_molhada",
+            "acidentes_chuva", "acidentes_buraco", "acidentes_meteo_adversa"
+        ] if _m_fatores_temp == "Acidentes" else [
+            "obitos_embriaguez", "obitos_pista_molhada",
+            "obitos_chuva", "obitos_buraco", "obitos_meteo_adversa"
+        ]
+
+        labels_mapping = {
+            "acidentes_embriaguez": "Embriaguez",
+            "acidentes_pista_molhada": "Pista molhada",
+            "acidentes_chuva": "Chuva",
+            "acidentes_buraco": "Buracos",
+            "acidentes_meteo_adversa": "Meteo. adversa",
+            "obitos_embriaguez": "Embriaguez",
+            "obitos_pista_molhada": "Pista molhada",
+            "obitos_chuva": "Chuva",
+            "obitos_buraco": "Buracos",
+            "obitos_meteo_adversa": "Meteo. adversa",
+        }
+
+        # Prepare formatting for X-axis
+        _df_fat_temp["mes_nome"] = _df_fat_temp["mes_acidente"].map({
+            1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+            7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez",
+        })
+
+        df_long = _df_fat_temp.melt(
+            id_vars=["mes_nome"],
+            value_vars=cols_to_plot,
+            var_name="Fator",
+            value_name="Total"
+        )
+        df_long["Fator"] = df_long["Fator"].map(labels_mapping)
+
+        fig_fat_temp = px.line(
+            df_long,
+            x="mes_nome",
+            y="Total",
+            color="Fator",
+            markers=True,
+            labels={"mes_nome": "Mês", "Total": "Total de " + _m_fatores_temp, "Fator": "Fator de Risco"},
+            height=400,
+        )
+        fig_fat_temp.update_layout(margin=dict(t=10, b=10))
+        st.plotly_chart(fig_fat_temp, width='stretch')
+    else:
+        st.info("Sem dados de fatores para os filtros selecionados.")
 
     st.divider()
 
@@ -889,6 +1118,13 @@ with tab_fatores:
     else:
         _gdf = load_gold_uf(tuple(sorted(uf_sel)))
         _vdf = load_vitimas_uf(tuple(sorted(uf_sel)))
+
+        if ano_sel != "Todos":
+            _gdf = _gdf[_gdf["ano_acidente"] == int(ano_sel)]
+            _vdf = _vdf[_vdf["ano_acidente"] == int(ano_sel)]
+        if mes_sel is not None:
+            _gdf = _gdf[_gdf["mes_acidente"] == int(mes_sel)]
+            _vdf = _vdf[_vdf["mes_acidente"] == int(mes_sel)]
 
 
         # ── Tipos de Acidentes ────────────────────────────────────────────────────
