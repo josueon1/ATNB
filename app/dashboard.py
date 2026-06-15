@@ -354,6 +354,136 @@ def load_municipios_com_causas(ano: int | None, ufs: tuple, mes: int | None = No
     return agg.merge(coords, on=["municipio", "uf_acidente"], how="left").dropna(subset=["lat", "lon"])
 
 
+@st.cache_data(show_spinner="Carregando fatores por município...")
+def load_municipios_fatores(ano: int | None, ufs: tuple, mes: int | None = None) -> pd.DataFrame:
+    """Calcula estatísticas de fatores de risco (incluindo sazonalidade) por município."""
+    filters = _date_filter(ano, mes)
+    if ufs:
+        filters = (filters or []) + [("uf_acidente", "in", list(ufs))]
+    
+    ac_table = pq.read_table(
+        str(PROCESSED_DIR / "acidentes_gold"),
+        columns=[
+            "num_acidente", "municipio", "uf_acidente", "regiao", 
+            "mes_acidente", "qtde_acidente", "cond_pista", "cond_meteorologica"
+        ],
+        filters=filters or None
+    )
+    df_ac = ac_table.to_pandas()
+    
+    # Carrega embriaguez das vítimas
+    vt_table = pq.read_table(
+        str(PROCESSED_DIR / "vitimas_silver"),
+        columns=["num_acidente", "susp_alcool"],
+        filters=filters or None
+    )
+    df_vt = vt_table.to_pandas()
+    
+    acidentes_alcool = set(df_vt.loc[df_vt["susp_alcool"] == "SIM", "num_acidente"])
+    df_ac["is_alcool"] = df_ac["num_acidente"].isin(acidentes_alcool).astype(int)
+    
+    # Codifica fatores
+    df_ac["is_pista_molhada"] = df_ac["cond_pista"].isin(_PISTA_MOLHADA).astype(int)
+    df_ac["is_buraco"] = (df_ac["cond_pista"] == "COM BURACO").astype(int)
+    df_ac["is_chuva"] = (df_ac["cond_meteorologica"] == "CHUVA").astype(int)
+    
+    # Fator Sazonal de Pico por Região
+    picos_regionais = {
+        "NORTE": 3,
+        "NORDESTE": 1,
+        "CENTRO-OESTE": 5,
+        "SUDESTE": 10,
+        "SUL": 10
+    }
+    df_ac["reg_upper"] = df_ac["regiao"].astype(str).str.upper()
+    df_ac["mes_pico"] = df_ac["reg_upper"].map(picos_regionais)
+    df_ac["is_sazonal"] = (df_ac["mes_acidente"].astype(int) == df_ac["mes_pico"]).astype(int)
+    
+    agg = (
+        df_ac.groupby(["municipio", "uf_acidente"], as_index=False, observed=True)
+        .agg(
+            total_acidentes=("qtde_acidente", "sum"),
+            acidentes_embriaguez=("is_alcool", "sum"),
+            acidentes_pista_molhada=("is_pista_molhada", "sum"),
+            acidentes_chuva=("is_chuva", "sum"),
+            acidentes_buraco=("is_buraco", "sum"),
+            acidentes_sazonal=("is_sazonal", "sum")
+        )
+    )
+    
+    def _predominante(row):
+        fatores = {
+            "🍷 Álcool": row["acidentes_embriaguez"],
+            "🌧️ Pista Molhada": row["acidentes_pista_molhada"],
+            "🌦️ Chuva / Tempo Adverso": row["acidentes_chuva"],
+            "🕳️ Buracos": row["acidentes_buraco"],
+            "📅 Sazonalidade / Pico": row["acidentes_sazonal"]
+        }
+        if max(fatores.values()) == 0:
+            return "Sem Fatores Específicos"
+        return max(fatores, key=fatores.get)
+        
+    agg["Fator Predominante"] = agg.apply(_predominante, axis=1)
+    return agg
+
+
+@st.cache_data(show_spinner="Carregando dados de explosão...")
+def load_sunburst_sazonal_data(ano: int | None, ufs: tuple, mes: int | None = None) -> pd.DataFrame:
+    """Carrega dados estruturados para o gráfico de explosão (Sunburst) sazonal e geográfico."""
+    filters = _date_filter(ano, mes)
+    if ufs:
+        filters = (filters or []) + [("uf_acidente", "in", list(ufs))]
+    
+    ac_table = pq.read_table(
+        str(PROCESSED_DIR / "acidentes_gold"),
+        columns=[
+            "num_acidente", "municipio", "uf_acidente", "regiao", 
+            "mes_acidente", "qtde_acidente", "cond_pista", "cond_meteorologica"
+        ],
+        filters=filters or None
+    )
+    df_ac = ac_table.to_pandas()
+    
+    # Carrega dados de embriaguez
+    vt_table = pq.read_table(
+        str(PROCESSED_DIR / "vitimas_silver"),
+        columns=["num_acidente", "susp_alcool"],
+        filters=filters or None
+    )
+    df_vt = vt_table.to_pandas()
+    
+    acidentes_alcool = set(df_vt.loc[df_vt["susp_alcool"] == "SIM", "num_acidente"])
+    df_ac["is_alcool"] = df_ac["num_acidente"].isin(acidentes_alcool)
+    
+    # Classificação exclusiva dos fatores causais
+    conds = [
+        df_ac["is_alcool"],
+        df_ac["cond_pista"].isin(_PISTA_MOLHADA),
+        df_ac["cond_meteorologica"] == "CHUVA",
+        df_ac["cond_pista"] == "COM BURACO"
+    ]
+    choices = [
+        "🍷 Álcool",
+        "🌧️ Pista Molhada",
+        "🌦️ Chuva",
+        "🕳️ Buracos"
+    ]
+    df_ac["fator"] = np.select(conds, choices, default="Outros / Sem Fator")
+    
+    # Mapeia meses
+    meses_abreviados = {
+        1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+        7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
+    }
+    df_ac["mes_nome"] = df_ac["mes_acidente"].map(meses_abreviados)
+    
+    return (
+        df_ac.groupby(["regiao", "mes_nome", "fator", "municipio", "uf_acidente"], observed=True)["qtde_acidente"]
+        .sum()
+        .reset_index()
+    )
+
+
 @st.cache_data(show_spinner=False)
 def load_geojson() -> dict:
     with open(str(GEOJSON_PATH), encoding="utf-8") as f:
@@ -845,16 +975,36 @@ with tab_temporal:
     st.subheader("Evolução Mensal dos Fatores e Causas de Risco")
     st.caption("Acompanhe o volume de acidentes e óbitos causados por fatores específicos ao longo dos meses do ano.")
 
-    _m_fatores_temp = st.radio(
-        "Métrica de fatores",
-        options=["Acidentes", "Óbitos"],
-        horizontal=True,
-        key="radio_fatores_temp",
-    )
+    col_fat1, col_fat2 = st.columns(2)
+    with col_fat1:
+        _m_fatores_temp = st.radio(
+            "Métrica de fatores",
+            options=["Acidentes", "Óbitos"],
+            horizontal=True,
+            key="radio_fatores_temp",
+        )
+    with col_fat2:
+        _regiao_fatores = st.selectbox(
+            "Região para análise temporal",
+            options=["Todas as Regiões", "Norte", "Nordeste", "Centro-Oeste", "Sudeste", "Sul"],
+            key="select_regiao_fatores"
+        )
+
+    MAP_REGIAO_UFS = {
+        "Norte": ["AC", "AP", "AM", "PA", "RO", "RR", "TO"],
+        "Nordeste": ["AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"],
+        "Centro-Oeste": ["DF", "GO", "MT", "MS"],
+        "Sudeste": ["ES", "MG", "RJ", "SP"],
+        "Sul": ["PR", "RS", "SC"]
+    }
+
+    _ufs_fatores = ()
+    if _regiao_fatores != "Todas as Regiões":
+        _ufs_fatores = tuple(MAP_REGIAO_UFS[_regiao_fatores])
 
     _df_fat_temp = load_fatores_temporais(
         None if ano_sel == "Todos" else int(ano_sel),
-        tuple(sorted(uf_sel)) if uf_sel else (),
+        _ufs_fatores,
         agrupar_por="mes"
     )
 
@@ -1016,56 +1166,102 @@ with tab_ts:
 # TAB 3 — CORRELAÇÃO & INDICADORES
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_corr:
+    st.subheader("Análise de Correlação: Frota Circulante × Total de Acidentes por Município")
+    
+    col_corr1, col_corr2 = st.columns(2)
+    with col_corr1:
+        # Seletor de Motivos (Fatores)
+        _motivo_corr = st.selectbox(
+            "Fator/Motivo de Acidente a correlacionar (Eixo Y)",
+            options=[
+                "Geral (Todos os Acidentes)", 
+                "🍷 Álcool", 
+                "🌧️ Pista Molhada", 
+                "🌦️ Chuva", 
+                "🕳️ Buracos",
+                "📅 Sazonalidade / Pico"
+            ],
+            key="select_motivo_corr"
+        )
 
-
-    # ── Correlação: Frota x Acidentes ────────────────────────────────────────
-    st.subheader("Correlação: Frota Circulante × Total de Acidentes por Município")
     st.caption(
         "Escala logarítmica em ambos os eixos. "
         "Tamanho do ponto = total de óbitos. "
-        "Passe o cursor para ver taxa por 100k hab. e taxa de mortalidade."
+        "Passe o cursor para ver taxas e estatísticas detalhadas."
     )
+
+    # Definição do mapeamento de colunas com base no motivo selecionado
+    y_col = {
+        "Geral (Todos os Acidentes)": "total_acidentes",
+        "🍷 Álcool": "acidentes_com_alcool",
+        "🌧️ Pista Molhada": "acidentes_pista_molhada",
+        "🌦️ Chuva": "acidentes_chuva",
+        "🕳️ Buracos": "acidentes_buraco",
+        "📅 Sazonalidade / Pico": "acidentes_sazonal"
+    }[_motivo_corr]
+
+    y_label = {
+        "Geral (Todos os Acidentes)": "Total de Acidentes (log)",
+        "🍷 Álcool": "Acidentes com Álcool (log)",
+        "🌧️ Pista Molhada": "Acidentes em Pista Molhada (log)",
+        "🌦️ Chuva": "Acidentes em Chuva (log)",
+        "🕳️ Buracos": "Acidentes com Buraco (log)",
+        "📅 Sazonalidade / Pico": "Acidentes em Meses de Pico (log)"
+    }[_motivo_corr]
+
     df_corr = load_correlacao()
+    import scipy.stats as stats
+
     df_corr_plot = df_corr[
-        (df_corr["frota_circulante"] > 0) & (df_corr["total_acidentes"] > 0)
+        (df_corr["frota_circulante"] > 0) & (df_corr[y_col] > 0)
     ].copy()
     if uf_sel:
         df_corr_plot = df_corr_plot[df_corr_plot["uf_acidente"].isin(uf_sel)]
     
-    # Aplicar o filtro de Top N usando EXATAMENTE a mesma lista de municípios do ranking geral
     top_municipios = df_ranking.head(top_n)["municipio"].unique()
     df_corr_plot = df_corr_plot[df_corr_plot["municipio"].isin(top_municipios)]
 
-    # correlacao_frota não tem coluna de ano; exibimos nota quando filtro de ano está ativo
     if ano_sel != "Todos":
         st.caption(f"ℹ️ O gráfico de frota usa dados históricos agregados — o filtro de ano não se aplica aqui.")
 
     fig_corr = px.scatter(
         df_corr_plot,
         x="frota_circulante",
-        y="total_acidentes",
+        y=y_col,
         color="uf_acidente",
         size="total_obitos",
         size_max=30,
         hover_name="municipio",
-        hover_data={"taxa_acidente_100k": True, "taxa_letalidade": True},
+        hover_data={
+            "taxa_acidente_100k": True,
+            "taxa_letalidade": True,
+            "acidentes_com_alcool": ":,",
+            "acidentes_pista_molhada": ":,",
+            "acidentes_chuva": ":,",
+            "acidentes_buraco": ":,",
+            "acidentes_sazonal": ":,"
+        },
         log_x=True,
         log_y=True,
         labels={
             "frota_circulante": "Frota Circulante (log)",
-            "total_acidentes": "Total de Acidentes (log)",
+            y_col: y_label,
             "uf_acidente": "UF",
+            "acidentes_com_alcool": "🍷 Álcool",
+            "acidentes_pista_molhada": "🌧️ Pista Molhada",
+            "acidentes_chuva": "🌦️ Chuva",
+            "acidentes_buraco": "🕳️ Buracos",
+            "acidentes_sazonal": "📅 Sazonalidade / Pico"
         },
         height=460,
     )
 
+    # Linha de tendência global para as cidades exibidas
     if len(df_corr_plot) > 1:
-        # Linha de tendência (OLS) em escala log
         _lx = np.log10(df_corr_plot["frota_circulante"])
-        _ly = np.log10(df_corr_plot["total_acidentes"])
+        _ly = np.log10(df_corr_plot[y_col])
         _coef = np.polyfit(_lx, _ly, 1)
 
-        import scipy.stats as stats
         r_val, p_val = stats.pearsonr(_lx, _ly)
         r_squared = r_val ** 2
         p_text = "p < 0.001" if p_val < 0.001 else f"p = {p_val:.3f}"
@@ -1077,9 +1273,10 @@ with tab_corr:
         fig_corr.add_trace(go.Scatter(
             x=_trend_x, y=_trend_y,
             mode="lines",
-            name=f"Tendência (β={_coef[0]:.2f}, R²={r_squared:.2f}, {p_text})",
+            name=f"Tendência Global (β={_coef[0]:.2f}, R²={r_squared:.2f}, {p_text})",
             line=dict(color="black", width=2, dash="dash"),
         ))
+
     fig_corr.update_layout(margin=dict(t=10, b=10))
     st.plotly_chart(fig_corr, width='stretch')
 
@@ -1113,138 +1310,196 @@ with tab_corr:
 with tab_fatores:
     st.subheader("Fatores, Causas e Locais de Acidentes")
 
-    if not uf_sel:
-        st.info("Selecione ao menos uma UF no painel lateral para visualizar esta análise.")
-    else:
-        _gdf = load_gold_uf(tuple(sorted(uf_sel)))
-        _vdf = load_vitimas_uf(tuple(sorted(uf_sel)))
-
-        if ano_sel != "Todos":
-            _gdf = _gdf[_gdf["ano_acidente"] == int(ano_sel)]
-            _vdf = _vdf[_vdf["ano_acidente"] == int(ano_sel)]
-        if mes_sel is not None:
-            _gdf = _gdf[_gdf["mes_acidente"] == int(mes_sel)]
-            _vdf = _vdf[_vdf["mes_acidente"] == int(mes_sel)]
-
-
-        # ── Tipos de Acidentes ────────────────────────────────────────────────────
-        st.markdown("#### Tipos de Acidentes")
-
-        df_tipos = (
-            _gdf.groupby("tp_acidente", observed=True)
-            .agg(
-                total_acidentes=("qtde_acidente", "sum"),
-                total_obitos=("qtde_obitos", "sum"),
-                total_feridos=("qtde_feridosilesos", "sum"),
-            )
-            .reset_index()
-            .dropna(subset=["tp_acidente"])
-            .sort_values("total_acidentes", ascending=False)
-            .reset_index(drop=True)
+    # 1. SAZONALIDADE REGIONAL (HEATMAP)
+    st.markdown("#### Sazonalidade Regional: O Comportamento de cada Região")
+    st.caption("Como a onda de acidentes viaja pelo país durante o ano? Cada região apresenta seu próprio mês de pico consolidado.")
+    try:
+        df_reg = pd.read_parquet(PROCESSED_DIR / "analise_temporal" / "regional_seasonality.parquet")
+        meses_nome = {1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun', 
+                      7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'}
+        df_reg["mes_nome"] = df_reg["mes_acidente"].map(meses_nome)
+        df_reg = df_reg.sort_values(by=["regiao", "mes_acidente"])
+        pivot_reg = df_reg.pivot(index="regiao", columns="mes_nome", values="pct_acidentes")
+        ordem_meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+        pivot_reg = pivot_reg[ordem_meses]
+        ordem_regioes = ['Norte', 'Nordeste', 'Centro-Oeste', 'Sudeste', 'Sul']
+        pivot_reg = pivot_reg.reindex(ordem_regioes)
+        
+        fig_heat = px.imshow(
+            pivot_reg,
+            labels=dict(x="Mês", y="Região", color="% do Ano na Região"),
+            x=ordem_meses,
+            y=ordem_regioes,
+            color_continuous_scale="Reds",
+            aspect="auto",
+            title="Concentração de Acidentes no Ano por Região"
         )
-        df_tipos.insert(0, "rank", df_tipos.index + 1)
-        df_tipos["mortalidade"] = (
-            df_tipos["total_obitos"] / df_tipos["total_acidentes"].replace(0, pd.NA) * 100
-        ).round(2)
+        fig_heat.update_xaxes(side="top")
+        fig_heat.update_layout(height=360)
+        st.plotly_chart(fig_heat, width='stretch')
+    except Exception as e:
+        st.error(f"Erro ao carregar sazonalidade regional: {e}")
 
-        tipo_l, tipo_r = st.columns([1.3, 0.7])
+    st.divider()
 
-        with tipo_l:
-            fig_tipos = px.bar(
-                df_tipos.sort_values("total_acidentes"),
-                x="total_acidentes",
-                y="tp_acidente",
-                orientation="h",
-                text="total_acidentes",
-                color="total_acidentes",
-                color_continuous_scale="Blues",
-                labels={"total_acidentes": "Total de Acidentes", "tp_acidente": "Tipo"},
-                height=460,
-            )
-            fig_tipos.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
-            fig_tipos.update_layout(margin=dict(l=0, r=30, t=10, b=10), coloraxis_showscale=False)
-            st.plotly_chart(fig_tipos, width='stretch')
-
-        with tipo_r:
-            st.dataframe(
-                df_tipos.rename(columns={
-                    "rank": "#",
-                    "tp_acidente": "Tipo de Acidente",
-                    "total_acidentes": "Acidentes",
-                    "total_obitos": "Óbitos",
-                    "total_feridos": "Feridos",
-                    "mortalidade": "Letalidade (%)",
-                }),
-                hide_index=True,
-                height=460,
-                width='stretch',
-            )
-
-        st.divider()
-
-
-        # ── Bairros e Ruas com Mais Acidentes ─────────────────────────────────────
-        st.markdown("#### Bairros e Ruas com Maior Número de Acidentes")
-
-        df_bairros = (
-            _gdf.groupby(["municipio", "bairro_acidente"], observed=True, dropna=False)
-            .agg(total_acidentes=("qtde_acidente", "sum"), total_obitos=("qtde_obitos", "sum"))
-            .reset_index()
-            .dropna(subset=["bairro_acidente"])
-            .sort_values("total_acidentes", ascending=False)
-            .head(20)
-            .reset_index(drop=True)
-        )
-        df_bairros.insert(0, "rank", df_bairros.index + 1)
-
-        _has_rua = "end_acidente" in _gdf.columns
-
-        if _has_rua:
-            df_ruas = (
-                _gdf.groupby(
-                    ["municipio", "bairro_acidente", "end_acidente"],
-                    observed=True, dropna=False,
-                )
-                .agg(total_acidentes=("qtde_acidente", "sum"), total_obitos=("qtde_obitos", "sum"))
-                .reset_index()
-                .dropna(subset=["end_acidente"])
-                .sort_values("total_acidentes", ascending=False)
-                .head(20)
-                .reset_index(drop=True)
-            )
-            df_ruas.insert(0, "rank", df_ruas.index + 1)
-
-        rl1, rl2 = st.columns(2)
-
-        with rl1:
-            st.markdown("**Top 20 Bairros**")
-            st.dataframe(
-                df_bairros.rename(columns={
-                    "rank": "#", "municipio": "Município",
-                    "bairro_acidente": "Bairro",
-                    "total_acidentes": "Acidentes", "total_obitos": "Óbitos",
-                }),
-                hide_index=True,
-                height=540,
-                width='stretch',
-            )
-
-        with rl2:
-            if _has_rua:
-                st.markdown("**Top 20 Ruas / Avenidas**")
-                st.dataframe(
-                    df_ruas.rename(columns={
-                        "rank": "#", "municipio": "Município",
-                        "bairro_acidente": "Bairro", "end_acidente": "Rua / Avenida",
-                        "total_acidentes": "Acidentes", "total_obitos": "Óbitos",
-                    }),
-                    hide_index=True,
-                    height=540,
-                    width='stretch',
-                )
+    # 2. GRÁFICO INTEGRADO: SAZONALIDADE, FATORES E MUNICÍPIOS (GRÁFICO DE LINHAS)
+    st.markdown("#### Cruzamento Sazonal e Fatores de Risco por Município")
+    st.caption("Evolução mensal de acidentes causados por fatores de risco específicos nas principais cidades (Top N). Use a legenda lateral para isolar municípios ou fatores.")
+    
+    _regiao_cruzado = st.selectbox(
+        "Selecione a Região para análise por município",
+        options=["Todas as Regiões", "Norte", "Nordeste", "Centro-Oeste", "Sudeste", "Sul"],
+        key="select_regiao_cruzado"
+    )
+    
+    try:
+        _ano_sun = None if ano_sel == "Todos" else int(ano_sel)
+        MAP_REGIAO_UFS = {
+            "Norte": ["AC", "AP", "AM", "PA", "RO", "RR", "TO"],
+            "Nordeste": ["AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"],
+            "Centro-Oeste": ["DF", "GO", "MT", "MS"],
+            "Sudeste": ["ES", "MG", "RJ", "SP"],
+            "Sul": ["PR", "RS", "SC"]
+        }
+        _ufs_sun = tuple(MAP_REGIAO_UFS[_regiao_cruzado]) if _regiao_cruzado != "Todas as Regiões" else ()
+        df_sun = load_sunburst_sazonal_data(_ano_sun, _ufs_sun, mes_sel)
+        
+        if df_sun.empty:
+            st.info("Sem dados suficientes para gerar o gráfico sazonal.")
+        else:
+            if _regiao_cruzado != "Todas as Regiões":
+                ufs_regiao = MAP_REGIAO_UFS[_regiao_cruzado]
+                df_ranking_reg = df_ranking[df_ranking["uf_acidente"].isin(ufs_regiao)]
+                df_ranking_top = df_ranking_reg.head(top_n)
             else:
-                st.info(
-                    "Dados de logradouro (end_acidente) não disponíveis. "
-                    "Re-execute o pipeline para incluir este campo."
+                df_ranking_top = df_ranking.head(top_n)
+
+            df_sun["mun_uf"] = df_sun["municipio"].astype(str) + " - " + df_sun["uf_acidente"].astype(str)
+            df_ranking_top_keys = df_ranking_top["municipio"].astype(str) + " - " + df_ranking_top["uf_acidente"].astype(str)
+            df_cruzado = df_sun[df_sun["mun_uf"].isin(df_ranking_top_keys)].copy()
+            
+            # Filtra fatores sem relevância para focar nos 4 fatores causadores principais
+            df_cruzado = df_cruzado[df_cruzado["fator"] != "Outros / Sem Fator"].copy()
+            
+            if df_cruzado.empty:
+                st.info("Sem dados nos Top N municípios para gerar a visualização.")
+            else:
+                ordem_meses = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+                df_cruzado["mes_nome"] = pd.Categorical(df_cruzado["mes_nome"], categories=ordem_meses, ordered=True)
+                df_cruzado = df_cruzado.sort_values(["mes_nome", "mun_uf"])
+                
+                df_cruzado = df_cruzado.rename(columns={
+                    "mun_uf": "Localidade",
+                    "mes_nome": "Mês",
+                    "qtde_acidente": "Acidentes",
+                    "fator": "Fator de Risco"
+                })
+
+                # Criação do Gráfico de Linhas Cruzado
+                fig_cruzado = px.line(
+                    df_cruzado,
+                    x="Mês",
+                    y="Acidentes",
+                    color="Localidade",
+                    line_dash="Fator de Risco",
+                    markers=True,
+                    category_orders={"Mês": ordem_meses},
+                    color_discrete_sequence=px.colors.qualitative.Alphabet,
+                    title="Tendência Temporal dos Fatores por Cidade",
+                    height=580,
                 )
+                fig_cruzado.update_layout(
+                    margin=dict(t=80, b=20, l=10, r=10),
+                    legend=dict(orientation="v", yanchor="top", y=1.0, xanchor="left", x=1.02)
+                )
+                st.plotly_chart(fig_cruzado, use_container_width=True)
+    except Exception as e:
+        st.error(f"Erro ao gerar gráfico de linhas multidimensional: {e}")
+
+    st.divider()
+
+    # 3. DETALHE LOCAL (UF) - TIPOS, BAIRROS E RUAS
+    st.markdown("#### Detalhamento de Logradouros e Tipos de Acidentes")
+    if not uf_sel:
+        st.info("ℹ️ Selecione ao menos uma UF no painel lateral esquerdo para carregar o detalhamento local (Tipos de acidentes, bairros e ruas).")
+    else:
+        try:
+            _gdf = load_gold_uf(tuple(sorted(uf_sel)))
+            _vdf = load_vitimas_uf(tuple(sorted(uf_sel)))
+
+            if ano_sel != "Todos":
+                _gdf = _gdf[_gdf["ano_acidente"] == int(ano_sel)]
+                _vdf = _vdf[_vdf["ano_acidente"] == int(ano_sel)]
+            if mes_sel is not None:
+                _gdf = _gdf[_gdf["mes_acidente"] == int(mes_sel)]
+                _vdf = _vdf[_vdf["mes_acidente"] == int(mes_sel)]
+
+            st.markdown("##### Tipos de Acidentes na Região Selecionada")
+            df_tipos = (
+                _gdf.groupby("tp_acidente", observed=True)
+                .agg(total_acidentes=("qtde_acidente", "sum"), total_obitos=("qtde_obitos", "sum"), total_feridos=("qtde_feridosilesos", "sum"))
+                .reset_index().dropna(subset=["tp_acidente"]).sort_values("total_acidentes", ascending=False).reset_index(drop=True)
+            )
+            df_tipos.insert(0, "rank", df_tipos.index + 1)
+            df_tipos["mortalidade"] = (df_tipos["total_obitos"] / df_tipos["total_acidentes"].replace(0, pd.NA) * 100).round(2)
+
+            tipo_l, tipo_r = st.columns([1.3, 0.7])
+            with tipo_l:
+                fig_tipos = px.bar(
+                    df_tipos.sort_values("total_acidentes"),
+                    x="total_acidentes", y="tp_acidente", orientation="h", text="total_acidentes",
+                    color="total_acidentes", color_continuous_scale="Blues",
+                    labels={"total_acidentes": "Total de Acidentes", "tp_acidente": "Tipo"}, height=460,
+                )
+                fig_tipos.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
+                fig_tipos.update_layout(margin=dict(l=0, r=30, t=10, b=10), coloraxis_showscale=False)
+                st.plotly_chart(fig_tipos, use_container_width=True)
+
+            with tipo_r:
+                st.dataframe(
+                    df_tipos.rename(columns={
+                        "rank": "#", "tp_acidente": "Tipo de Acidente", "total_acidentes": "Acidentes",
+                        "total_obitos": "Óbitos", "total_feridos": "Feridos", "mortalidade": "Letalidade (%)"
+                    }),
+                    hide_index=True, height=460, use_container_width=True
+                )
+
+            st.divider()
+
+            # Bairros e Ruas com Mais Acidentes
+            st.markdown("##### Bairros e Ruas com Maior Número de Acidentes")
+            df_bairros = (
+                _gdf.groupby(["municipio", "bairro_acidente"], observed=True, dropna=False)
+                .agg(total_acidentes=("qtde_acidente", "sum"), total_obitos=("qtde_obitos", "sum"))
+                .reset_index().dropna(subset=["bairro_acidente"]).sort_values("total_acidentes", ascending=False).head(20).reset_index(drop=True)
+            )
+            df_bairros.insert(0, "rank", df_bairros.index + 1)
+
+            _has_rua = "end_acidente" in _gdf.columns
+            if _has_rua:
+                df_ruas = (
+                    _gdf.groupby(["municipio", "bairro_acidente", "end_acidente"], observed=True, dropna=False)
+                    .agg(total_acidentes=("qtde_acidente", "sum"), total_obitos=("qtde_obitos", "sum"))
+                    .reset_index().dropna(subset=["end_acidente"]).sort_values("total_acidentes", ascending=False).head(20).reset_index(drop=True)
+                )
+                df_ruas.insert(0, "rank", df_ruas.index + 1)
+
+            rl1, rl2 = st.columns(2)
+            with rl1:
+                st.markdown("**Top 20 Bairros**")
+                st.dataframe(
+                    df_bairros.rename(columns={"rank": "#", "municipio": "Município", "bairro_acidente": "Bairro", "total_acidentes": "Acidentes", "total_obitos": "Óbitos"}),
+                    hide_index=True, height=540, use_container_width=True
+                )
+            with rl2:
+                if _has_rua:
+                    st.markdown("**Top 20 Ruas / Avenidas**")
+                    st.dataframe(
+                        df_ruas.rename(columns={"rank": "#", "municipio": "Município", "bairro_acidente": "Bairro", "end_acidente": "Rua / Avenida", "total_acidentes": "Acidentes", "total_obitos": "Óbitos"}),
+                        hide_index=True, height=540, use_container_width=True
+                    )
+                else:
+                    st.info("Dados de logradouro não disponíveis.")
+        except Exception as e:
+            st.error(f"Erro ao carregar o detalhamento local por UF: {e}")
 

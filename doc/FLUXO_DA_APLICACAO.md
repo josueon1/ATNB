@@ -29,20 +29,17 @@ pipeline.py
 │   ├── ingest_acidentes()       lê  data/acidentes2023.csv                  (8.2M linhas)
 │   ├── ingest_vitimas()         lê  data/Vitimas_DadosAbertos_20260312.csv  (12.5M linhas)
 │   ├── ingest_localidade()      lê  data/Localidade_20260312.csv            (531k linhas)
-│   ├── ingest_volume_trafego()  lê  data/Volume_trafego_mensal.csv          (26k linhas)
 │   └── ingest_tipo_veiculo()    lê  data/TipoVeiculo_DadosAbertos_20260312.csv  (310 MB, opcional)
 │
 ├── [SILVER] Transformação — src/pipeline/transform.py
 │   ├── transform_acidentes()    limpa tipos, extrai hora (HHMMSS→int), valida coordenadas
 │   ├── transform_vitimas()      normaliza strings, cria flag_obito
 │   ├── transform_localidade()   deduplica por chv_localidade, calcula taxa_motorizacao
-│   ├── transform_volume_trafego()  normaliza colunas
 │   └── transform_tipo_veiculo() (se não --skip-heavy)
 │
 ├── [SILVER] Persistência — src/pipeline/persist.py
 │   ├── save_localidade_silver()     → data/processed/localidade_silver.parquet
 │   ├── save_vitimas_silver()        → data/processed/vitimas_silver/          (particionado por ano)
-│   ├── save_volume_trafego_silver() → data/processed/volume_trafego_silver.parquet
 │   └── save_tipo_veiculo_silver()   → data/processed/tipo_veiculo_silver.parquet  (se disponível)
 │
 ├── [GOLD] Enriquecimento — src/pipeline/enrich.py
@@ -139,7 +136,6 @@ ATNB/
 │   ├── Vitimas_*.csv             ← CSV bruto (não versionado no git)
 │   ├── Localidade_*.csv          ← CSV bruto (não versionado no git)
 │   ├── TipoVeiculo_*.csv         ← CSV bruto (não versionado no git)
-│   ├── Volume_trafego_mensal.csv ← CSV bruto (não versionado no git)
 │   └── processed/                ← saída do pipeline (Parquet, não versionado)
 ├── requirements.txt
 └── README.md

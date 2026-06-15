@@ -136,11 +136,22 @@ def build_ranking_locais(df_gold: pd.DataFrame) -> pd.DataFrame:
     """
     logger.info("Calculando ranking de locais com mais acidentes...")
 
-    # Criar coluna temporária indicando se o acidente não teve vítimas (feridos ou óbitos)
+    # Criar flags temporárias para cálculo eficiente de fatores causais por município
     df_gold_temp = df_gold.copy()
     df_gold_temp["acidente_sem_vitima"] = (
         (df_gold_temp["qtde_obitos"] == 0) & (df_gold_temp["qtde_feridosilesos"] == 0)
     ).astype(int)
+    df_gold_temp["is_alcool"] = (df_gold_temp["vitimas_com_alcool"] > 0).astype(int)
+    df_gold_temp["is_pista_molhada"] = df_gold_temp["cond_pista"].isin(["MOLHADA", "ESCORREGADIA"]).astype(int)
+    df_gold_temp["is_chuva"] = (df_gold_temp["cond_meteorologica"] == "CHUVA").astype(int)
+    df_gold_temp["is_buraco"] = (df_gold_temp["cond_pista"] == "COM BURACO").astype(int)
+    
+    picos_regionais = {
+        "NORTE": 3, "NORDESTE": 1, "CENTRO-OESTE": 5, "SUDESTE": 10, "SUL": 10
+    }
+    df_gold_temp["reg_upper"] = df_gold_temp["regiao"].astype(str).str.upper()
+    df_gold_temp["mes_pico"] = df_gold_temp["reg_upper"].map(picos_regionais)
+    df_gold_temp["is_sazonal"] = (df_gold_temp["mes_acidente"].astype(int) == df_gold_temp["mes_pico"]).astype(int)
 
     agg = df_gold_temp.groupby(
         ["uf_acidente", "municipio", "codigo_ibge", "qtde_habitantes",
@@ -152,10 +163,11 @@ def build_ranking_locais(df_gold: pd.DataFrame) -> pd.DataFrame:
         total_feridos=("qtde_feridosilesos", "sum"),
         total_envolvidos=("qtde_envolvidos", "sum"),
         acidentes_sem_vitimas=("acidente_sem_vitima", "sum"),
-        acidentes_chuva=(
-            "cond_meteorologica",
-            lambda x: (x == "CHUVA").sum(),
-        ),
+        acidentes_com_alcool=("is_alcool", "sum"),
+        acidentes_pista_molhada=("is_pista_molhada", "sum"),
+        acidentes_chuva=("is_chuva", "sum"),
+        acidentes_buraco=("is_buraco", "sum"),
+        acidentes_sazonal=("is_sazonal", "sum"),
         acidentes_noite=(
             "fase_dia",
             lambda x: x.isin(["NOITE", "MADRUGADA"]).sum(),
@@ -266,6 +278,8 @@ def build_correlacao_frota_acidentes(df_ranking: pd.DataFrame) -> pd.DataFrame:
         "qtde_habitantes", "frota_circulante", "taxa_motorizacao",
         "total_acidentes", "total_obitos", "taxa_acidente_100k",
         "taxa_letalidade", "taxa_mortalidade_100k", "ups",
+        "acidentes_com_alcool", "acidentes_pista_molhada",
+        "acidentes_chuva", "acidentes_buraco", "acidentes_sazonal",
     ]
     df = df_ranking[cols].copy()
 
