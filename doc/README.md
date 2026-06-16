@@ -41,7 +41,7 @@ data/ → datasets utilizados
 notebooks/ → análise exploratória
 src/ → scripts de processamento
 app/ → dashboard interativo
-doc/ → documentação complementar (análise acadêmica, referências, etc.)
+doc/ → documentação complementar (análise consolidada, referências, etc.)
 
 ---
 
@@ -83,7 +83,6 @@ src/pipeline/pipeline.py          ← Orquestrador principal
          │         data/Vitimas_DadosAbertos_20260312.csv
          │         data/TipoVeiculo_DadosAbertos_20260312.csv
          │         data/Localidade_20260312.csv
-         │         data/Volume_trafego_mensal.csv
          │
          ├─► src/pipeline/transform.py   ← SILVER: limpa e padroniza os dados
          │         Normaliza datas, horas, strings e remove nulos
@@ -98,7 +97,7 @@ src/pipeline/pipeline.py          ← Orquestrador principal
          │         data/processed/vitimas_silver/   (por ano)
          │         data/processed/analise_temporal/
          │
-         └─► doc/relatorio_sazonalidade.md ← Documento dinâmico de análise acadêmica
+         └─► doc/analise_ATNB.md         ← Relatório consolidado de análises e conclusões
 
 streamlit run app/dashboard.py
          │
