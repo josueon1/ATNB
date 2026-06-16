@@ -1116,6 +1116,8 @@ with tab_ts:
     
     try:
         ts_df = pd.read_parquet(PROCESSED_DIR / "analise_temporal" / "por_ano_mes.parquet")
+        # Filtra meses com total de acidentes maior que zero para evitar que bases parciais ou zeradas distorçam a previsão
+        ts_df = ts_df[ts_df["total_acidentes"] > 0].copy()
         ts_df['data'] = pd.to_datetime(ts_df['data'])
         ts_df = ts_df.set_index('data')
         
@@ -1128,12 +1130,93 @@ with tab_ts:
         
         decomp = sm.tsa.seasonal_decompose(ts_df['total_acidentes'].dropna(), model='additive')
         
-        fig_decomp = go.Figure()
-        fig_decomp.add_trace(go.Scatter(x=decomp.trend.index, y=decomp.trend, name="Tendência", line=dict(color="#3b82f6", width=3)))
-        fig_decomp.add_trace(go.Scatter(x=decomp.seasonal.index, y=decomp.seasonal, name="Sazonalidade", line=dict(color="#f59e0b")))
-        fig_decomp.add_trace(go.Scatter(x=decomp.resid.index, y=decomp.resid, name="Resíduos (Ruído)", mode='markers', marker=dict(color="#ef4444", size=4)))
+        # Criação de textos descritivos e marcadores personalizados para destacar as informações com estrela
+        resid_texts = []
+        resid_symbols = []
+        resid_sizes = []
+        resid_colors = []
         
-        fig_decomp.update_layout(height=450, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        for dt, val in decomp.resid.items():
+            dt_str = dt.strftime("%Y-%m")
+            if dt_str == "2019-04":
+                resid_texts.append("Tragédia de Brumadinho")
+                resid_symbols.append("star")
+                resid_sizes.append(14)
+                resid_colors.append("#f1c40f") # Amarelo/Dourado destacado
+            elif dt_str == "2020-02":
+                resid_texts.append("Carnaval e preocupação com a COVID-19")
+                resid_symbols.append("star")
+                resid_sizes.append(14)
+                resid_colors.append("#f1c40f")
+            elif dt_str == "2020-04":
+                resid_texts.append("Forte impacto da pandemia de COVID-19.")
+                resid_symbols.append("star")
+                resid_sizes.append(14)
+                resid_colors.append("#f1c40f")
+            elif dt_str == "2024-04":
+                resid_texts.append("Alagamento no Rio Grande do Sul")
+                resid_symbols.append("star")
+                resid_sizes.append(14)
+                resid_colors.append("#f1c40f")
+            else:
+                # Outras notas mantidas em círculos padrão
+                if dt_str == "2020-05":
+                    resid_texts.append("Forte impacto da pandemia de COVID-19 (lockdown severo e queda histórica na circulação de veículos)")
+                elif dt_str == "2020-06":
+                    resid_texts.append("Queda de acidentes associada à manutenção do isolamento social durante a primeira onda de COVID-19")
+                elif dt_str == "2021-03":
+                    resid_texts.append("Impacto da segunda onda de COVID-19 (retorno de lockdowns rígidos e fases restritivas em diversos estados)")
+                elif dt_str == "2024-05":
+                    resid_texts.append("Redução drástica causada pelas enchentes históricas no Rio Grande do Sul, com bloqueios de rodovias e colapso na mobilidade")
+                elif dt_str == "2021-01":
+                    resid_texts.append("Elevação atípica decorrente da retomada de viagens de férias de verão e flexibilização temporária de restrições sanitárias")
+                elif pd.notna(val) and abs(val) > 9000:
+                    resid_texts.append("Flutuação residual significativa devido a eventos atípicos ou ruído metodológico de registro")
+                else:
+                    resid_texts.append("Variação residual típica (ruído estatístico comum da série)")
+                
+                resid_symbols.append("circle")
+                resid_sizes.append(6)
+                resid_colors.append("#ef4444")
+        
+        fig_decomp = go.Figure()
+        
+        # Tendência e Sazonalidade
+        fig_decomp.add_trace(go.Scatter(
+            x=decomp.trend.index, 
+            y=decomp.trend, 
+            name="Tendência", 
+            line=dict(color="#3b82f6", width=3),
+            hovertemplate="<b>Tendência:</b> %{y:,.0f}<extra></extra>"
+        ))
+        fig_decomp.add_trace(go.Scatter(
+            x=decomp.seasonal.index, 
+            y=decomp.seasonal, 
+            name="Sazonalidade", 
+            line=dict(color="#f59e0b"),
+            hovertemplate="<b>Sazonalidade:</b> %{y:,.0f}<extra></extra>"
+        ))
+        
+        # Resíduos com texto descritivo personalizado e marcação em estrela
+        fig_decomp.add_trace(go.Scatter(
+            x=decomp.resid.index, 
+            y=decomp.resid, 
+            name="Resíduos (Ruído)", 
+            mode='markers', 
+            marker=dict(
+                symbol=resid_symbols,
+                size=resid_sizes,
+                color=resid_colors,
+                line=dict(width=1, color="black")
+            ),
+            text=resid_texts,
+            hovertemplate="<b>%{x|%B %Y}</b><br>Resíduo: %{y:,.0f}<br><b>Nota:</b> %{text}<extra></extra>"
+        ))
+        
+        fig_decomp.update_layout(
+            height=450, 
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
         st.plotly_chart(fig_decomp, width='stretch')
 
         st.divider()
@@ -1150,11 +1233,12 @@ with tab_ts:
         ).fit()
         
         forecast = hw_model.forecast(12)
-        forecast_idx = pd.date_range(start=ts_df.index[-1] + pd.DateOffset(months=1), periods=12, freq='MS')
         
         fig_fcst = go.Figure()
-        fig_fcst.add_trace(go.Scatter(x=ts_df.index, y=ts_df['total_acidentes'], name="Histórico Real", line=dict(color="#94a3b8")))
-        fig_fcst.add_trace(go.Scatter(x=forecast_idx, y=forecast, name="Previsão (12 meses)", line=dict(color="#8b5cf6", dash="dot", width=3)))
+        # Removemos valores nulos/zeros do histórico plotado para manter consistência visual
+        ts_df_clean = ts_df['total_acidentes'].dropna()
+        fig_fcst.add_trace(go.Scatter(x=ts_df_clean.index, y=ts_df_clean, name="Histórico Real", line=dict(color="#94a3b8")))
+        fig_fcst.add_trace(go.Scatter(x=forecast.index, y=forecast, name="Previsão (12 meses)", line=dict(color="#8b5cf6", dash="dot", width=3)))
         
         fig_fcst.update_layout(height=400, yaxis_title="Total de Acidentes", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_fcst, width='stretch')
@@ -1342,79 +1426,130 @@ with tab_fatores:
 
     st.divider()
 
-    # 2. GRÁFICO INTEGRADO: SAZONALIDADE, FATORES E MUNICÍPIOS (GRÁFICO DE LINHAS)
-    st.markdown("#### Cruzamento Sazonal e Fatores de Risco por Município")
-    st.caption("Evolução mensal de acidentes causados por fatores de risco específicos nas principais cidades (Top N). Use a legenda lateral para isolar municípios ou fatores.")
+    # 2. RANKING DE FATORES DE RISCO POR REGIÃO
+    st.markdown("#### Ranking de Fatores de Risco por Região")
+    st.caption("Volume absoluto e proporção dos principais fatores de risco de acidentes mapeados na base. Selecione a região no seletor abaixo para atualizar o ranking.")
     
-    _regiao_cruzado = st.selectbox(
-        "Selecione a Região para análise por município",
+    _regiao_ranking_fator = st.selectbox(
+        "Selecione a Região para o ranking de fatores",
         options=["Todas as Regiões", "Norte", "Nordeste", "Centro-Oeste", "Sudeste", "Sul"],
-        key="select_regiao_cruzado"
+        key="select_regiao_ranking_fator"
     )
     
     try:
         _ano_sun = None if ano_sel == "Todos" else int(ano_sel)
-        MAP_REGIAO_UFS = {
-            "Norte": ["AC", "AP", "AM", "PA", "RO", "RR", "TO"],
-            "Nordeste": ["AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"],
-            "Centro-Oeste": ["DF", "GO", "MT", "MS"],
-            "Sudeste": ["ES", "MG", "RJ", "SP"],
-            "Sul": ["PR", "RS", "SC"]
-        }
-        _ufs_sun = tuple(MAP_REGIAO_UFS[_regiao_cruzado]) if _regiao_cruzado != "Todas as Regiões" else ()
+        # Filtra por UF da barra lateral, se selecionada
+        _ufs_sun = tuple(sorted(uf_sel)) if uf_sel else ()
         df_sun = load_sunburst_sazonal_data(_ano_sun, _ufs_sun, mes_sel)
         
         if df_sun.empty:
-            st.info("Sem dados suficientes para gerar o gráfico sazonal.")
+            st.info("Sem dados suficientes para gerar o ranking de fatores.")
         else:
-            if _regiao_cruzado != "Todas as Regiões":
-                ufs_regiao = MAP_REGIAO_UFS[_regiao_cruzado]
-                df_ranking_reg = df_ranking[df_ranking["uf_acidente"].isin(ufs_regiao)]
-                df_ranking_top = df_ranking_reg.head(top_n)
-            else:
-                df_ranking_top = df_ranking.head(top_n)
-
-            df_sun["mun_uf"] = df_sun["municipio"].astype(str) + " - " + df_sun["uf_acidente"].astype(str)
-            df_ranking_top_keys = df_ranking_top["municipio"].astype(str) + " - " + df_ranking_top["uf_acidente"].astype(str)
-            df_cruzado = df_sun[df_sun["mun_uf"].isin(df_ranking_top_keys)].copy()
-            
             # Filtra fatores sem relevância para focar nos 4 fatores causadores principais
-            df_cruzado = df_cruzado[df_cruzado["fator"] != "Outros / Sem Fator"].copy()
+            df_cruzado = df_sun[df_sun["fator"] != "Outros / Sem Fator"].copy()
             
-            if df_cruzado.empty:
-                st.info("Sem dados nos Top N municípios para gerar a visualização.")
-            else:
-                ordem_meses = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
-                df_cruzado["mes_nome"] = pd.Categorical(df_cruzado["mes_nome"], categories=ordem_meses, ordered=True)
-                df_cruzado = df_cruzado.sort_values(["mes_nome", "mun_uf"])
+            # Filtra pela Região selecionada, se aplicável
+            if _regiao_ranking_fator != "Todas as Regiões":
+                df_cruzado = df_cruzado[df_cruzado["regiao"].astype(str).str.title() == _regiao_ranking_fator.title()].copy()
                 
-                df_cruzado = df_cruzado.rename(columns={
-                    "mun_uf": "Localidade",
-                    "mes_nome": "Mês",
-                    "qtde_acidente": "Acidentes",
+            # Agrupa e soma por fator causal
+            df_rank_fator = (
+                df_cruzado.groupby("fator", as_index=False, observed=True)
+                .agg(Acidentes=("qtde_acidente", "sum"))
+                .sort_values(by="Acidentes", ascending=False)
+                .reset_index(drop=True)
+            )
+            
+            if df_rank_fator.empty:
+                st.info("Sem dados de fatores de risco para a região selecionada.")
+            else:
+                # 1. Prepara dados do ranking de fatores (para o gráfico à esquerda)
+                total_acidentes_reg = df_rank_fator["Acidentes"].sum()
+                df_rank_fator["Proporção (%)"] = (
+                    (df_rank_fator["Acidentes"] / total_acidentes_reg) * 100
+                ).round(2)
+                
+                df_rank_fator.insert(0, "#", df_rank_fator.index + 1)
+                df_rank_fator = df_rank_fator.rename(columns={"fator": "Fator de Risco"})
+                
+                # Cores para cada fator
+                fator_colors = {
+                    "🍷 Álcool": "#e056fd",
+                    "🌧️ Pista Molhada": "#0984e3",
+                    "🌦️ Chuva": "#74b9ff",
+                    "🕳️ Buracos": "#d63031"
+                }
+                
+                # 2. Prepara dados do ranking de estados da região (para a tabela à direita, seguindo Top N)
+                df_state_ranking = (
+                    df_cruzado.groupby(["uf_acidente", "fator"], as_index=False, observed=True)
+                    .agg(Acidentes=("qtde_acidente", "sum"))
+                )
+                
+                # Ordena e limita pelo slider Top N
+                df_state_total = df_state_ranking.groupby("uf_acidente", observed=True)["Acidentes"].sum().reset_index()
+                df_state_total = df_state_total.sort_values(by="Acidentes", ascending=False).head(top_n)
+                ordem_state = df_state_total["uf_acidente"].tolist()
+                
+                # Filtra apenas as UFs no Top N
+                df_state_ranking = df_state_ranking[df_state_ranking["uf_acidente"].isin(ordem_state)].copy()
+                df_state_ranking["uf_acidente"] = pd.Categorical(df_state_ranking["uf_acidente"], categories=ordem_state, ordered=True)
+                df_state_ranking = df_state_ranking.sort_values("uf_acidente")
+                
+                df_state_ranking = df_state_ranking.rename(columns={
+                    "uf_acidente": "UF",
                     "fator": "Fator de Risco"
                 })
-
-                # Criação do Gráfico de Linhas Cruzado
-                fig_cruzado = px.line(
-                    df_cruzado,
-                    x="Mês",
-                    y="Acidentes",
-                    color="Localidade",
-                    line_dash="Fator de Risco",
-                    markers=True,
-                    category_orders={"Mês": ordem_meses},
-                    color_discrete_sequence=px.colors.qualitative.Alphabet,
-                    title="Tendência Temporal dos Fatores por Cidade",
-                    height=580,
+                
+                # Pivot
+                df_pivot_state = (
+                    df_state_ranking.pivot(index="UF", columns="Fator de Risco", values="Acidentes")
+                    .fillna(0)
+                    .astype(int)
                 )
-                fig_cruzado.update_layout(
-                    margin=dict(t=80, b=20, l=10, r=10),
-                    legend=dict(orientation="v", yanchor="top", y=1.0, xanchor="left", x=1.02)
-                )
-                st.plotly_chart(fig_cruzado, use_container_width=True)
+                
+                # Garante que todas as colunas de fatores existam na tabela
+                for col in ["🍷 Álcool", "🌧️ Pista Molhada", "🌦️ Chuva", "🕳️ Buracos"]:
+                    if col not in df_pivot_state.columns:
+                        df_pivot_state[col] = 0
+                        
+                # Adiciona coluna de Total
+                df_pivot_state["Total"] = df_pivot_state.sum(axis=1)
+                df_pivot_state = df_pivot_state.sort_values(by="Total", ascending=False).reset_index()
+                
+                # Adiciona o ranking (#)
+                df_pivot_state.insert(0, "#", df_pivot_state.index + 1)
+                
+                # Criação do layout de colunas para gráfico e tabela
+                rank_col1, rank_col2 = st.columns([1.2, 0.8])
+                with rank_col1:
+                    fig_rank = px.bar(
+                        df_rank_fator,
+                        x="Acidentes",
+                        y="Fator de Risco",
+                        orientation="h",
+                        color="Fator de Risco",
+                        color_discrete_map=fator_colors,
+                        height=360,
+                        title=f"Distribuição de Fatores de Risco - {_regiao_ranking_fator}"
+                    )
+                    fig_rank.update_layout(
+                        margin=dict(t=30, b=20, l=10, r=10),
+                        showlegend=False,
+                        yaxis=dict(autorange="reversed") # Mantém o 1º lugar no topo
+                    )
+                    st.plotly_chart(fig_rank, use_container_width=True)
+                    
+                with rank_col2:
+                    st.markdown(f"**Ranking de UFs ({_regiao_ranking_fator} - Top {top_n})**")
+                    st.dataframe(
+                        df_pivot_state,
+                        hide_index=True,
+                        height=360,
+                        use_container_width=True
+                    )
     except Exception as e:
-        st.error(f"Erro ao gerar gráfico de linhas multidimensional: {e}")
+        st.error(f"Erro ao gerar ranking de fatores por região: {e}")
 
     st.divider()
 
