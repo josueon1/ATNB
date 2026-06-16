@@ -1468,11 +1468,25 @@ with tab_fatores:
 
             # Bairros e Ruas com Mais Acidentes
             st.markdown("##### Bairros e Ruas com Maior Número de Acidentes")
+
+            # Strings que equivalem a "sem informação" — tratadas como nulo
+            _VALORES_NULOS = {
+                "SEM CORRELACAO", "NAO INFORMADO", "NAO INFORMADA",
+                "DESCONHECIDO", "DESCONHECIDA", "NÃO INFORMADO",
+                "NÃO INFORMADA", "NONE", "NULL", "", "0",
+            }
+
             df_bairros = (
                 _gdf.groupby(["municipio", "bairro_acidente"], observed=True, dropna=False)
                 .agg(total_acidentes=("qtde_acidente", "sum"), total_obitos=("qtde_obitos", "sum"))
-                .reset_index().dropna(subset=["bairro_acidente"]).sort_values("total_acidentes", ascending=False).head(20).reset_index(drop=True)
+                .reset_index()
             )
+            df_bairros = df_bairros[
+                df_bairros["bairro_acidente"].notna() &
+                (~df_bairros["bairro_acidente"].astype(str).str.upper().str.strip().isin(_VALORES_NULOS))
+            ]
+            df_bairros["total_obitos"] = df_bairros["total_obitos"].fillna(0).astype(int)
+            df_bairros = df_bairros.sort_values("total_acidentes", ascending=False).head(20).reset_index(drop=True)
             df_bairros.insert(0, "rank", df_bairros.index + 1)
 
             _has_rua = "end_acidente" in _gdf.columns
@@ -1480,9 +1494,25 @@ with tab_fatores:
                 df_ruas = (
                     _gdf.groupby(["municipio", "bairro_acidente", "end_acidente"], observed=True, dropna=False)
                     .agg(total_acidentes=("qtde_acidente", "sum"), total_obitos=("qtde_obitos", "sum"))
-                    .reset_index().dropna(subset=["end_acidente"]).sort_values("total_acidentes", ascending=False).head(20).reset_index(drop=True)
+                    .reset_index()
                 )
+                # Remove ruas nulas ou equivalentes a "sem informação"
+                df_ruas = df_ruas[
+                    df_ruas["end_acidente"].notna() &
+                    (~df_ruas["end_acidente"].astype(str).str.upper().str.strip().isin(_VALORES_NULOS))
+                ]
+                df_ruas["total_obitos"] = df_ruas["total_obitos"].fillna(0).astype(int)
+                # Bairro nulo na tabela de ruas → exibe "—"
+                _bairro_str = df_ruas["bairro_acidente"].astype(str)
+                df_ruas["bairro_acidente"] = _bairro_str.where(
+                    _bairro_str.notna() &
+                    (_bairro_str.str.upper().str.strip() != "NAN") &
+                    (~_bairro_str.str.upper().str.strip().isin(_VALORES_NULOS)),
+                    other="—"
+                )
+                df_ruas = df_ruas.sort_values("total_acidentes", ascending=False).head(20).reset_index(drop=True)
                 df_ruas.insert(0, "rank", df_ruas.index + 1)
+
 
             rl1, rl2 = st.columns(2)
             with rl1:

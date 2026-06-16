@@ -2,7 +2,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 from pathlib import Path
 
-PROCESSED_DIR = Path("d:/projetos/ATNB/data/processed")
+PROCESSED_DIR = Path(__file__).resolve().parents[1] / "data" / "processed"
 
 uf_to_regiao = {
     'AC': 'Norte', 'AP': 'Norte', 'AM': 'Norte', 'PA': 'Norte', 'RO': 'Norte', 'RR': 'Norte', 'TO': 'Norte',

@@ -63,11 +63,15 @@ def aggregate_vitimas_por_acidente(df_vitimas: pd.DataFrame) -> pd.DataFrame:
     )
     gravidade_pivot.columns.name = None
 
+    # Flag de suspeita de álcool (SIM ou S indica suspeita)
+    _alcool_flag = df_vitimas["susp_alcool"].astype(str).str.upper().isin(["SIM", "S"]).astype(int)
+
     # Totais gerais — sem lambda Python (usa só operações vetorizadas)
-    totais = df_vitimas.groupby("num_acidente", as_index=False).agg(
+    totais = df_vitimas.assign(_alcool=_alcool_flag).groupby("num_acidente", as_index=False).agg(
         total_vitimas=("qtde_envolvidos", "sum"),
         total_obitos=("qtde_obitos", "sum"),
         total_feridos=("qtde_feridosilesos", "sum"),
+        vitimas_com_alcool=("_alcool", "sum"),
     )
 
     df = totais.merge(gravidade_pivot, on="num_acidente", how="left")
